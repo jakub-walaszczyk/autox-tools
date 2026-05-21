@@ -413,34 +413,69 @@ class TestCmdWatch:
 
 
 # ---------------------------------------------------------------------------
-# _match_task_by_name
+# _normalize_component_name / _match_pod_to_task
 # ---------------------------------------------------------------------------
 
-class TestMatchTaskByName:
-    def test_exact_match(self):
-        names = ["indexing", "rag-templates-optimization", "evaluation"]
-        assert cli._match_task_by_name("indexing", names) == ["indexing"]
+class TestNormalizeComponentName:
+    def test_strips_comp_prefix(self):
+        assert cli._normalize_component_name("comp-documents-discovery") == "documents-discovery"
 
-    def test_exact_match_case_insensitive(self):
-        names = ["rag-templates-optimization", "evaluation"]
-        assert cli._match_task_by_name("Rag-Templates-Optimization", names) == ["rag-templates-optimization"]
+    def test_lowercases_and_replaces_underscores(self):
+        assert cli._normalize_component_name("Search_Space_Preparation") == "search-space-preparation"
 
-    def test_substring_match(self):
-        names = ["rag-templates-optimization", "rag-templates-indexing", "evaluation"]
-        result = cli._match_task_by_name("rag-templates", names)
-        assert set(result) == {"rag-templates-optimization", "rag-templates-indexing"}
+    def test_noop_for_already_normalized(self):
+        assert cli._normalize_component_name("documents-discovery") == "documents-discovery"
 
-    def test_substring_match_case_insensitive(self):
-        names = ["rag-templates-optimization", "evaluation"]
-        assert cli._match_task_by_name("OPTIMIZATION", names) == ["rag-templates-optimization"]
+    def test_strips_whitespace(self):
+        assert cli._normalize_component_name("  comp-foo  ") == "foo"
 
-    def test_no_match(self):
-        names = ["indexing", "evaluation"]
-        assert cli._match_task_by_name("nonexistent", names) == []
 
-    def test_exact_preferred_over_substring(self):
-        names = ["indexing", "rag-indexing", "indexing-v2"]
-        assert cli._match_task_by_name("indexing", names) == ["indexing"]
+class TestMatchPodToTask:
+    def test_exact_label_match(self):
+        result = cli._match_pod_to_task(
+            "some-pod", {"component_name": "indexing"}, {}, {"indexing", "eval"},
+        )
+        assert result == "indexing"
+
+    def test_v2_label_with_comp_prefix(self):
+        result = cli._match_pod_to_task(
+            "some-pod",
+            {"pipelines.kubeflow.org/v2_component_name": "comp-documents-discovery"},
+            {},
+            {"documents-discovery", "evaluation"},
+        )
+        assert result == "documents-discovery"
+
+    def test_v2_annotation_with_comp_prefix(self):
+        result = cli._match_pod_to_task(
+            "some-pod", {},
+            {"pipelines.kubeflow.org/v2_component_name": "comp-search-space-preparation"},
+            {"search-space-preparation"},
+        )
+        assert result == "search-space-preparation"
+
+    def test_substring_in_pod_name(self):
+        result = cli._match_pod_to_task(
+            "run-abc-rag-templates-optimization-xyz", {}, {},
+            {"rag-templates-optimization"},
+        )
+        assert result == "rag-templates-optimization"
+
+    def test_no_match_returns_none(self):
+        result = cli._match_pod_to_task(
+            "pipeline-zc4fk-system-container-impl-123", {}, {},
+            {"documents-discovery"},
+        )
+        assert result is None
+
+    def test_underscore_task_name_matches_hyphenated_label(self):
+        result = cli._match_pod_to_task(
+            "some-pod",
+            {"pipelines.kubeflow.org/v2_component_name": "comp-test-data-loader"},
+            {},
+            {"test_data_loader"},
+        )
+        assert result == "test_data_loader"
 
 
 # ---------------------------------------------------------------------------
@@ -459,7 +494,7 @@ class TestCmdLogs:
         client.get_run.return_value = run
 
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
-            args = argparse.Namespace(run_id="test-id", task=None, tail=100, all=False, json=False)
+            args = argparse.Namespace(run_id="test-id", tail=100, all=False, json=False)
             cli.cmd_logs(client, args, k8s_api=MagicMock())
 
         out = capsys.readouterr().out
@@ -467,58 +502,6 @@ class TestCmdLogs:
         assert "rag-templates-optimization" in out
         assert "evaluation" in out
         assert "--all" in out
-
-    def test_task_not_found_shows_available(self, capsys):
-        """--task with no match should list available components."""
-        tasks = [
-            _make_task("rag-templates-optimization", "Succeeded"),
-            _make_task("evaluation", "Succeeded"),
-        ]
-        run = _make_run(state="Succeeded", task_details=tasks)
-        client = MagicMock()
-        client.get_run.return_value = run
-
-        with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
-            args = argparse.Namespace(run_id="test-id", task="nonexistent", tail=100, all=False, json=False)
-            with pytest.raises(SystemExit):
-                cli.cmd_logs(client, args, k8s_api=MagicMock())
-
-        out = capsys.readouterr().out
-        assert "rag-templates-optimization" in out
-        assert "evaluation" in out
-
-    def test_task_substring_match(self, capsys):
-        """--task with a substring should match the right component."""
-        tasks = [
-            _make_task("rag-templates-optimization", "Succeeded"),
-            _make_task("evaluation", "Succeeded"),
-        ]
-        run = _make_run(state="Succeeded", task_details=tasks)
-
-        pod = MagicMock()
-        pod.metadata.name = "test-id-rag-templates-optimization-abc"
-        pod.status.phase = "Succeeded"
-        pod.status.container_statuses = []
-        main_container = MagicMock()
-        main_container.name = "main"
-        pod.spec.containers = [main_container]
-
-        k8s_api = MagicMock()
-        pods_response = MagicMock()
-        pods_response.items = [pod]
-        k8s_api.list_namespaced_pod.return_value = pods_response
-        k8s_api.read_namespaced_pod_log.return_value = "some log output"
-
-        client = MagicMock()
-        client.get_run.return_value = run
-
-        with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
-            args = argparse.Namespace(run_id="test-id", task="optimization", tail=100, all=False, json=False)
-            cli.cmd_logs(client, args, k8s_api=k8s_api)
-
-        out = capsys.readouterr().out
-        assert "rag-templates-optimization" in out
-        assert "some log output" in out
 
     def test_skips_wait_container(self, capsys):
         """The 'wait' container should be skipped from output."""
@@ -545,7 +528,7 @@ class TestCmdLogs:
         client.get_run.return_value = run
 
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
-            args = argparse.Namespace(run_id="test-id", task=None, tail=100, all=True, json=False)
+            args = argparse.Namespace(run_id="test-id", tail=100, all=True, json=False)
             cli.cmd_logs(client, args, k8s_api=k8s_api)
 
         out = capsys.readouterr().out
@@ -576,7 +559,7 @@ class TestCmdLogs:
         client.get_run.return_value = run
 
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
-            args = argparse.Namespace(run_id="test-id", task=None, tail=100, all=False, json=False)
+            args = argparse.Namespace(run_id="test-id", tail=100, all=False, json=False)
             cli.cmd_logs(client, args, k8s_api=k8s_api)
 
         out = capsys.readouterr().out
@@ -612,13 +595,126 @@ class TestCmdLogs:
         client.get_run.return_value = run
 
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
-            args = argparse.Namespace(run_id="test-id", task=None, tail=100, all=True, json=False)
+            args = argparse.Namespace(run_id="test-id", tail=100, all=True, json=False)
             cli.cmd_logs(client, args, k8s_api=k8s_api)
 
         out = capsys.readouterr().out
         assert "=== rag-templates-optimization (Succeeded) ===" in out
         assert "pod: run-my-pipeline-abc12-rag-templates-opt-4k7x2" in out
         assert "optimization logs here" in out
+
+    def test_v2_component_label_with_comp_prefix(self, capsys):
+        """KFP v2 pods with comp- prefixed labels should match task names."""
+        tasks = [_make_task("documents-discovery", "Failed", error="exit 1")]
+        run = _make_run(state="Failed", task_details=tasks)
+
+        pod = MagicMock()
+        pod.metadata.name = "pipeline-zc4fk-system-container-impl-1249432282"
+        pod.metadata.labels = {
+            "pipelines.kubeflow.org/v2_component_name": "comp-documents-discovery",
+        }
+        pod.metadata.annotations = {}
+        pod.status.phase = "Failed"
+        pod.status.container_statuses = []
+        main_c = MagicMock()
+        main_c.name = "main"
+        pod.spec.containers = [main_c]
+
+        k8s_api = MagicMock()
+        pods_response = MagicMock()
+        pods_response.items = [pod]
+        k8s_api.list_namespaced_pod.return_value = pods_response
+        k8s_api.read_namespaced_pod_log.return_value = "discovery error logs"
+
+        client = MagicMock()
+        client.get_run.return_value = run
+
+        with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
+            args = argparse.Namespace(run_id="test-id", tail=100, all=False, json=False)
+            cli.cmd_logs(client, args, k8s_api=k8s_api)
+
+        out = capsys.readouterr().out
+        assert "=== documents-discovery (Failed) ===" in out
+        assert "discovery error logs" in out
+
+    def test_v2_annotation_matching(self, capsys):
+        """KFP v2 pods with v2_component_name annotation should match."""
+        tasks = [_make_task("search-space-preparation", "Failed")]
+        run = _make_run(state="Failed", task_details=tasks)
+
+        pod = MagicMock()
+        pod.metadata.name = "pipeline-abc-system-container-impl-999"
+        pod.metadata.labels = {}
+        pod.metadata.annotations = {
+            "pipelines.kubeflow.org/v2_component_name": "comp-search-space-preparation",
+        }
+        pod.status.phase = "Failed"
+        pod.status.container_statuses = []
+        main_c = MagicMock()
+        main_c.name = "main"
+        pod.spec.containers = [main_c]
+
+        k8s_api = MagicMock()
+        pods_response = MagicMock()
+        pods_response.items = [pod]
+        k8s_api.list_namespaced_pod.return_value = pods_response
+        k8s_api.read_namespaced_pod_log.return_value = "search logs"
+
+        client = MagicMock()
+        client.get_run.return_value = run
+
+        with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
+            args = argparse.Namespace(run_id="test-id", tail=100, all=False, json=False)
+            cli.cmd_logs(client, args, k8s_api=k8s_api)
+
+        out = capsys.readouterr().out
+        assert "=== search-space-preparation (Failed) ===" in out
+        assert "search logs" in out
+
+    def test_fallback_dumps_impl_pods_when_no_match(self, capsys):
+        """When no task-to-pod mapping works, fall back to impl pod logs."""
+        tasks = [_make_task("documents-discovery", "Failed")]
+        run = _make_run(state="Failed", task_details=tasks)
+
+        driver_pod = MagicMock()
+        driver_pod.metadata.name = "pipeline-zc4fk-system-container-driver-123"
+        driver_pod.metadata.labels = {}
+        driver_pod.metadata.annotations = {}
+        driver_pod.status.phase = "Succeeded"
+        driver_pod.status.container_statuses = []
+        d_main = MagicMock()
+        d_main.name = "main"
+        driver_pod.spec.containers = [d_main]
+
+        impl_pod = MagicMock()
+        impl_pod.metadata.name = "pipeline-zc4fk-system-container-impl-456"
+        impl_pod.metadata.labels = {}
+        impl_pod.metadata.annotations = {}
+        impl_pod.status.phase = "Failed"
+        impl_pod.status.container_statuses = []
+        cs = MagicMock()
+        cs.state.terminated.exit_code = 1
+        impl_pod.status.container_statuses = [cs]
+        i_main = MagicMock()
+        i_main.name = "main"
+        impl_pod.spec.containers = [i_main]
+
+        k8s_api = MagicMock()
+        pods_response = MagicMock()
+        pods_response.items = [driver_pod, impl_pod]
+        k8s_api.list_namespaced_pod.return_value = pods_response
+        k8s_api.read_namespaced_pod_log.return_value = "fallback error output"
+
+        client = MagicMock()
+        client.get_run.return_value = run
+
+        with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
+            args = argparse.Namespace(run_id="test-id", tail=100, all=False, json=False)
+            cli.cmd_logs(client, args, k8s_api=k8s_api)
+
+        out = capsys.readouterr().out
+        assert "fallback error output" in out
+        assert "impl-456" in out
 
 
 # ---------------------------------------------------------------------------

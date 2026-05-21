@@ -5,7 +5,7 @@ Usage::
     uv run pipelines status <run-id>
     uv run pipelines list [--limit N] [--experiment EXP] [--state STATE]
     uv run pipelines watch <run-id> [--interval SECS] [--timeout SECS]
-    uv run pipelines logs <run-id> [--task NAME] [--tail N] [--all]
+    uv run pipelines logs <run-id> [--tail N] [--all]
     uv run pipelines artifacts <run-id> [--download DIR]
 """
 
@@ -355,13 +355,26 @@ _SKIP_CONTAINERS = {"wait"}
 
 _POD_COMPONENT_LABEL_KEYS = [
     "pipelines.kubeflow.org/component_name",
+    "pipelines.kubeflow.org/v2_component_name",
     "component_name",
 ]
 
 _POD_COMPONENT_ANNOTATION_KEYS = [
     "pipelines.kubeflow.org/component_name",
+    "pipelines.kubeflow.org/v2_component_name",
     "pipelines.kubeflow.org/task_name",
 ]
+
+
+def _normalize_component_name(name: str) -> str:
+    """Normalize a KFP component/task name for fuzzy matching.
+
+    Strips the ``comp-`` prefix added by KFP v2 and unifies separators.
+    """
+    n = name.lower().strip()
+    if n.startswith("comp-"):
+        n = n[5:]
+    return n.replace("_", "-").replace(" ", "-")
 
 
 def _match_pod_to_task(
@@ -371,31 +384,53 @@ def _match_pod_to_task(
     task_names: set[str],
 ) -> str | None:
     """Match a pod to a task using labels, annotations, and pod name."""
-    for key in _POD_COMPONENT_LABEL_KEYS:
-        value = labels.get(key, "")
-        if value and value in task_names:
-            return value
+    normalized_lookup = {_normalize_component_name(t): t for t in task_names}
 
-    for key in _POD_COMPONENT_ANNOTATION_KEYS:
-        value = annotations.get(key, "")
-        if value and value in task_names:
+    for key in _POD_COMPONENT_LABEL_KEYS + _POD_COMPONENT_ANNOTATION_KEYS:
+        value = labels.get(key, "") or annotations.get(key, "")
+        if not value:
+            continue
+        if value in task_names:
             return value
+        norm = _normalize_component_name(value)
+        if norm in normalized_lookup:
+            return normalized_lookup[norm]
 
     for tname in task_names:
-        normalized = tname.lower().replace("_", "-").replace(" ", "-")
+        normalized = _normalize_component_name(tname)
         if normalized in pod_name:
             return tname
 
     return None
 
 
-def _match_task_by_name(query: str, task_names: list[str]) -> list[str]:
-    """Match a user query against task/component names (case-insensitive substring)."""
-    q = query.lower()
-    exact = [t for t in task_names if t.lower() == q]
-    if exact:
-        return exact
-    return [t for t in task_names if q in t.lower()]
+def _is_pod_failed(pod: Any) -> bool:
+    """Return True if a pod is in a failed state (phase or container exit code)."""
+    phase = ((pod.status.phase or "") if pod.status else "").lower()
+    if phase == "failed":
+        return True
+    for cs in (pod.status.container_statuses or []) if pod.status else []:
+        terminated = cs.state.terminated if cs.state else None
+        if terminated and terminated.exit_code != 0:
+            return True
+    return False
+
+
+def _find_exec_pods(pod_items: list[Any], prefer_failed: bool) -> list[Any]:
+    """Select execution pods for the fallback log dump.
+
+    Prefers ``*-impl-*`` pods (where user code runs in KFP v2) over driver
+    pods.  When *prefer_failed* is True, further narrows to failed pods.
+    """
+    impl_pods = [p for p in pod_items if "-impl-" in (p.metadata.name or "")]
+    pool = impl_pods or pod_items
+
+    if prefer_failed:
+        failed = [p for p in pool if _is_pod_failed(p)]
+        if failed:
+            return failed
+
+    return pool
 
 
 def _fetch_pod_logs(
@@ -482,17 +517,8 @@ def cmd_logs(kfp_client: Any, args: argparse.Namespace, **kwargs: Any) -> None:
 
     run_details = getattr(run, "run_details", None) or run_obj
     tasks = _extract_tasks(run_details, pipeline_name)
-    all_task_names = [t["name"] for t in tasks]
 
-    if args.task:
-        matched_names = _match_task_by_name(args.task, all_task_names)
-        if not matched_names:
-            print(f"Task '{args.task}' not found. Available components:")
-            for t in tasks:
-                print(f"  {t['name']:<40} {t['state']}")
-            sys.exit(1)
-        tasks = [t for t in tasks if t["name"] in matched_names]
-    elif not args.all:
+    if not args.all:
         failed_tasks = [t for t in tasks if t["state"].lower() in {"failed", "error"}]
         if failed_tasks:
             tasks = failed_tasks
@@ -500,8 +526,7 @@ def cmd_logs(kfp_client: Any, args: argparse.Namespace, **kwargs: Any) -> None:
             print(f"No failed tasks in run {args.run_id}. All components:")
             for t in tasks:
                 print(f"  {t['name']:<40} {t['state']}")
-            print("\nUse --all to fetch logs from all components, "
-                  "or --task <name> for a specific one.")
+            print("\nUse --all to fetch logs from all components.")
             return
 
     pod_items = _list_run_pods(k8s_api, namespace, args.run_id)
@@ -568,6 +593,28 @@ def cmd_logs(kfp_client: Any, args: argparse.Namespace, **kwargs: Any) -> None:
             results.append({
                 "name": matched,
                 "state": task_state,
+                "pod": pname,
+                "containers": clogs,
+            })
+
+    # Strategy 3: fallback — show logs from execution pods when mapping fails
+    if not results and pod_items:
+        failed_states = {"failed", "error"}
+        want_failed = any(t["state"].lower() in failed_states for t in tasks)
+        exec_pods = _find_exec_pods(pod_items, want_failed)
+
+        for pod in exec_pods:
+            pname = pod.metadata.name or ""
+            phase = (pod.status.phase or "Unknown") if pod.status else "Unknown"
+            cstatuses = []
+            if pod.status and pod.status.container_statuses:
+                cstatuses = pod.status.container_statuses
+            cnames = [c.name for c in (pod.spec.containers or [])] if pod.spec else ["main"]
+            clogs = _fetch_pod_logs(k8s_api, pname, namespace, cnames, cstatuses, args.tail)
+
+            results.append({
+                "name": f"(unmatched pod, phase={phase})",
+                "state": phase,
                 "pod": pname,
                 "containers": clogs,
             })
@@ -1231,7 +1278,6 @@ def _build_parser() -> argparse.ArgumentParser:
     # logs
     p = sub.add_parser("logs", help="Fetch pod logs for pipeline tasks")
     p.add_argument("run_id", help="KFP run ID (UUID)")
-    p.add_argument("--task", help="Component name or substring (e.g. 'rag-templates-optimization')")
     p.add_argument("--tail", type=int, default=100, help="Number of log lines from the end (default: 100)")
     p.add_argument("--all", action="store_true", help="Show logs for all components, not just failed")
 
