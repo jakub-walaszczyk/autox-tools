@@ -34,6 +34,13 @@ uv run milvus --help
 
 Each tool reads its connection settings from environment variables. Place a `.env` file in the project root (or any parent directory) to avoid exporting variables manually. See individual tool READMEs for required variables.
 
+Two independent S3 connections are supported:
+
+| Prefix | Purpose | Used by |
+|---|---|---|
+| `AWS_*` | Data storage (experiment assets, datasets) | `s3` tool |
+| `ARTIFACTS_AWS_*` | Pipeline artifacts (evaluation results, notebooks, leaderboard) | `pipelines artifacts` subcommand |
+
 ## Development
 
 ```bash
@@ -65,6 +72,7 @@ autox-tools/
       __init__.py
       _kfp.py          #   KFP client factory (env vars -> kfp.Client)
       _k8s.py          #   Kubernetes client factory with API URL derivation
+      _artifacts_s3.py #   S3 client factory for pipeline artifacts (ARTIFACTS_AWS_*)
       _filters.py      #   Task noise filtering (hides scaffolding tasks)
       cli.py           #   argparse entry point and subcommands
       README.md        #   Command reference and setup guide

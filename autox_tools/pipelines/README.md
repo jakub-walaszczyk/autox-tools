@@ -28,12 +28,16 @@ K8S_API_PORT=6443                          # Default: 6443 (OCP) / 443 (ROSA)
 
 The K8S client reuses `KFP_VERIFY_SSL` for TLS verification, matching autox-ci's behavior.
 
-For the `artifacts` command (S3 access):
+For the `artifacts` command (pipeline artifacts S3 -- separate from the data-storage S3 used by the `s3` tool):
 
 ```bash
-AWS_S3_ENDPOINT=https://minio.apps.cluster.example.com
-AWS_ACCESS_KEY_ID=your-access-key
-AWS_SECRET_ACCESS_KEY=your-secret-key
+ARTIFACTS_AWS_S3_ENDPOINT=https://artifacts-minio.apps.cluster.example.com
+ARTIFACTS_AWS_ACCESS_KEY_ID=your-artifacts-access-key
+ARTIFACTS_AWS_SECRET_ACCESS_KEY=your-artifacts-secret-key
+ARTIFACTS_S3_BUCKET=your-artifacts-bucket    # Used when KFP run config lacks a full s3:// URI
+# Optional
+ARTIFACTS_AWS_DEFAULT_REGION=us-east-1
+ARTIFACTS_S3_VERIFY_TLS=true
 ```
 
 ### Verify connectivity
@@ -93,28 +97,51 @@ uv run pipelines --json logs <run-id>               # JSON output
 
 Handles CrashLoopBackOff pods by also fetching previous container logs.
 
-### `artifacts` -- List S3 artifacts
+### `artifacts` -- Browse and download S3 artifacts
 
-Browse output artifacts from a pipeline run stored in S3/MinIO. Categorizes artifacts by type (evaluation results, notebooks, leaderboard, RAG patterns).
+Browse output artifacts from a pipeline run stored in S3/MinIO. Default mode shows a category summary with RAG pattern discovery; use `--pattern` to drill into specific patterns.
 
 ```bash
+# Summary view (category counts + pattern names)
 uv run pipelines artifacts <run-id>
 uv run pipelines --json artifacts <run-id>
-uv run pipelines artifacts <run-id> --download ./results/   # Download all
+
+# Download all artifacts
+uv run pipelines artifacts <run-id> --download ./results/
+
+# Browse pipeline components
+uv run pipelines artifacts <run-id> --component all                    # List all components
+uv run pipelines artifacts <run-id> --component search-space-optimization  # Files in component
+uv run pipelines artifacts <run-id> --component search-space-optimization --download ./out/
+
+# Browse RAG patterns
+uv run pipelines artifacts <run-id> --pattern all              # List all patterns
+uv run pipelines artifacts <run-id> --pattern Pattern1         # Files in Pattern1
+uv run pipelines artifacts <run-id> --pattern Pattern1 --download ./out/  # Download pattern
+
+# Single artifact from a pattern
+uv run pipelines artifacts <run-id> --pattern Pattern1 --artifact evaluation_results.json
+
+# Print artifact content to stdout (pipe-friendly)
+uv run pipelines artifacts <run-id> --pattern Pattern1 --artifact evaluation_results.json --print
+uv run pipelines artifacts <run-id> --pattern Pattern1 --artifact evaluation_results.json --print | jq .
 ```
 
-Requires S3 credentials (`AWS_S3_ENDPOINT`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`). Without them, only artifact references are shown.
+Pattern name matching is case-insensitive and supports substring matching (e.g. `--pattern optim` matches `OptimizedChunking`). When `--artifact` is used without `--download`, the file is saved to the current directory.
+
+Requires artifacts S3 credentials (`ARTIFACTS_AWS_S3_ENDPOINT`, `ARTIFACTS_AWS_ACCESS_KEY_ID`, `ARTIFACTS_AWS_SECRET_ACCESS_KEY`). Without them, only artifact references are shown. These are separate from the `AWS_*` credentials used by the `s3` tool for data storage.
 
 ## Architecture
 
 ```
 autox_tools/pipelines/
-    __init__.py    Package marker
-    _kfp.py        KFP client factory (env vars -> kfp.Client)
-    _k8s.py        Kubernetes client factory with OCP/ROSA API URL derivation
-    _filters.py    Task noise filtering (hides KFP/Argo scaffolding)
-    cli.py         argparse entry point and subcommands
-    README.md      This file
+    __init__.py        Package marker
+    _kfp.py            KFP client factory (env vars -> kfp.Client)
+    _k8s.py            Kubernetes client factory with OCP/ROSA API URL derivation
+    _artifacts_s3.py   S3 client factory for pipeline artifacts (ARTIFACTS_AWS_* env vars)
+    _filters.py        Task noise filtering (hides KFP/Argo scaffolding)
+    cli.py             argparse entry point and subcommands
+    README.md          This file
 ```
 
 ## K8S API URL derivation
@@ -141,6 +168,22 @@ uv run pipelines logs abc-123-def-456
 
 # Download artifacts for offline analysis
 uv run pipelines artifacts abc-123-def-456 --download ./failed-run/
+```
+
+### Browse RAG pattern results
+
+```bash
+# See artifact summary and discover pattern names
+uv run pipelines artifacts abc-123-def-456
+
+# List all patterns with file counts
+uv run pipelines artifacts abc-123-def-456 --pattern all
+
+# Download a single evaluation result
+uv run pipelines artifacts abc-123-def-456 --pattern Pattern1 --artifact evaluation_results.json
+
+# Download an entire pattern's artifacts
+uv run pipelines artifacts abc-123-def-456 --pattern Pattern1 --download ./pattern-results/
 ```
 
 ### Monitor a running pipeline

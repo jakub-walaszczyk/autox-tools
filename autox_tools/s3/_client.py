@@ -17,6 +17,7 @@ import sys
 from typing import Any
 
 import boto3
+from botocore.config import Config
 from dotenv import find_dotenv, load_dotenv
 
 _REQUIRED_VARS = ("AWS_S3_ENDPOINT", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
@@ -39,4 +40,5 @@ def connect() -> Any:
         aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
         region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
         verify=verify,
+        config=Config(s3={"addressing_style": "path"}),
     )

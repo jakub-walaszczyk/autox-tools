@@ -66,14 +66,13 @@ class TestClientConnect:
              patch("autox_tools.s3._client.boto3") as mock_boto3:
             from autox_tools.s3._client import connect
             connect()
-            mock_boto3.client.assert_called_once_with(
-                "s3",
-                endpoint_url="https://minio.example.com",
-                aws_access_key_id="key",
-                aws_secret_access_key="secret",
-                region_name="us-east-1",
-                verify=True,
-            )
+            _, kwargs = mock_boto3.client.call_args
+            assert kwargs["endpoint_url"] == "https://minio.example.com"
+            assert kwargs["aws_access_key_id"] == "key"
+            assert kwargs["aws_secret_access_key"] == "secret"
+            assert kwargs["region_name"] == "us-east-1"
+            assert kwargs["verify"] is True
+            assert kwargs["config"].s3["addressing_style"] == "path"
 
     def test_connect_tls_disabled(self):
         env = {

@@ -1,7 +1,12 @@
 # `s3` -- S3/MinIO Asset Management CLI
 
-Browse, download, and clean up experiment artifacts stored in S3-compatible
-object storage (AWS S3 or MinIO) used by AutoRAG and AutoML pipelines.
+Browse, download, and clean up data assets stored in S3-compatible object
+storage (AWS S3 or MinIO) used by AutoRAG and AutoML pipelines.
+
+> **Note:** This tool connects to the **data-storage** S3 endpoint (`AWS_*`
+> variables). Pipeline artifacts (evaluation results, notebooks, leaderboard
+> reports) use a separate S3 connection configured via `ARTIFACTS_AWS_*`
+> variables -- see the [`pipelines` tool README](../pipelines/README.md).
 
 ## Setup
 

@@ -90,11 +90,38 @@ def _get_run_state(run: Any) -> str:
 
 
 def _get_pipeline_name(run: Any) -> str | None:
-    """Extract the pipeline name from a run object."""
-    name = getattr(run, "pipeline_spec", {})
-    if isinstance(name, dict):
-        return name.get("pipeline_name")
-    return getattr(name, "pipeline_name", None)
+    """Extract the pipeline name from a run object.
+
+    Supports both KFP v1 (``pipeline_spec.pipeline_name``) and KFP v2 IR
+    (``pipeline_spec.pipeline_spec.pipelineInfo.name``).
+    """
+    spec = getattr(run, "pipeline_spec", None)
+    if spec is None:
+        return None
+
+    if isinstance(spec, dict):
+        # KFP v1: top-level key
+        v1 = spec.get("pipeline_name")
+        if v1:
+            return str(v1)
+        # KFP v2 IR: nested under pipeline_spec -> pipelineInfo -> name
+        inner = spec.get("pipeline_spec", {})
+        if isinstance(inner, dict):
+            info = inner.get("pipelineInfo") or inner.get("pipeline_info") or {}
+            if isinstance(info, dict) and info.get("name"):
+                return str(info["name"])
+        return None
+
+    # Object-style access (protobuf / SDK model)
+    v1 = getattr(spec, "pipeline_name", None)
+    if v1:
+        return str(v1)
+    inner = getattr(spec, "pipeline_spec", None)
+    if inner is not None:
+        info = getattr(inner, "pipelineInfo", None) or getattr(inner, "pipeline_info", None)
+        if info is not None:
+            return getattr(info, "name", None)
+    return None
 
 
 def _is_terminal(state: str) -> bool:
@@ -581,143 +608,595 @@ def cmd_logs(kfp_client: Any, args: argparse.Namespace, **kwargs: Any) -> None:
             print(c["logs"])
 
 
+_CATEGORY_LABELS = {
+    "evaluation": "Evaluation Results",
+    "indexing_notebooks": "Indexing Notebooks",
+    "inference_notebooks": "Inference Notebooks",
+    "leaderboard": "Leaderboard",
+    "rag_patterns": "RAG Patterns",
+    "other": "Other",
+}
+
+
+def _categorize_object(key: str) -> str:
+    """Assign an S3 object key to an artifact category.
+
+    ``rag_patterns/`` is checked first — files nested inside pattern folders
+    (notebooks, evaluation JSONs, etc.) belong to the patterns category regardless
+    of their extension.
+    """
+    if "rag_patterns" in key.lower() or "pattern.json" in key:
+        return "rag_patterns"
+    if "evaluation_results.json" in key:
+        return "evaluation"
+    if key.endswith(".ipynb") and "indexing" in key.lower():
+        return "indexing_notebooks"
+    if key.endswith(".ipynb") and "inference" in key.lower():
+        return "inference_notebooks"
+    if key.endswith(".html") or "leaderboard" in key.lower():
+        return "leaderboard"
+    return "other"
+
+
+def _find_rag_patterns_prefix(
+    s3_client: Any,
+    bucket: str,
+    key_prefix: str,
+) -> str | None:
+    """Discover the ``rag_patterns/`` base prefix by sampling object keys.
+
+    The folder sits at an unpredictable depth (e.g.
+    ``<prefix>/<component>/<task-id>/rag_patterns/``).  Fetches a small batch
+    of objects and scans for the first key containing ``/rag_patterns/``.
+    """
+    from autox_tools.s3.cli import _paginate_objects
+
+    result = _paginate_objects(s3_client, bucket, key_prefix, max_keys=200)
+    for obj in result.get("Contents", []):
+        key: str = obj["Key"]
+        idx = key.find("/rag_patterns/")
+        if idx >= 0:
+            return key[: idx + len("/rag_patterns/")]
+    return None
+
+
+def _discover_patterns(
+    s3_client: Any,
+    bucket: str,
+    rag_prefix: str,
+) -> list[str]:
+    """Enumerate RAG pattern folder names under the given prefix."""
+    from autox_tools.s3.cli import _paginate_objects
+
+    result = _paginate_objects(s3_client, bucket, rag_prefix, delimiter="/")
+    patterns: list[str] = []
+    for cp in result.get("CommonPrefixes", []):
+        name = cp["Prefix"][len(rag_prefix) :].rstrip("/")
+        if name:
+            patterns.append(name)
+    return sorted(patterns)
+
+
+def _match_pattern_name(query: str, patterns: list[str]) -> list[str]:
+    """Case-insensitive substring match for pattern names; exact match preferred."""
+    q = query.lower()
+    exact = [p for p in patterns if p.lower() == q]
+    if exact:
+        return exact
+    return [p for p in patterns if q in p.lower()]
+
+
+def _discover_components(
+    s3_client: Any,
+    bucket: str,
+    key_prefix: str,
+) -> list[str]:
+    """Enumerate pipeline component folder names under the run prefix."""
+    from autox_tools.s3.cli import _paginate_objects
+
+    result = _paginate_objects(s3_client, bucket, key_prefix, delimiter="/")
+    components: list[str] = []
+    for cp in result.get("CommonPrefixes", []):
+        name = cp["Prefix"][len(key_prefix):].rstrip("/")
+        if name:
+            components.append(name)
+    return sorted(components)
+
+
+def _resolve_artifact_s3(
+    run_obj: Any, pipeline_name: str,
+) -> tuple[Any, str, str, str]:
+    """Resolve S3 client, bucket, prefix, and artifact root from KFP run config.
+
+    Returns ``(s3_client, bucket, key_prefix, artifact_root)``.
+    Exits on missing credentials or bucket.
+    """
+    runtime_config = getattr(run_obj, "runtime_config", None)
+    artifact_root = None
+    if runtime_config:
+        artifact_root = getattr(runtime_config, "pipeline_root", None)
+        if not artifact_root:
+            params = getattr(runtime_config, "parameters", {}) or {}
+            if isinstance(params, dict):
+                artifact_root = params.get("output", None)
+
+    if not artifact_root:
+        artifact_root = f"{pipeline_name}/"
+
+    s3_endpoint = os.getenv("ARTIFACTS_AWS_S3_ENDPOINT")
+    if not s3_endpoint:
+        sys.exit(
+            "Artifacts S3 credentials not configured -- set ARTIFACTS_AWS_S3_ENDPOINT, "
+            "ARTIFACTS_AWS_ACCESS_KEY_ID, and ARTIFACTS_AWS_SECRET_ACCESS_KEY."
+        )
+
+    from autox_tools.pipelines._artifacts_s3 import connect as artifacts_s3_connect
+    s3_client = artifacts_s3_connect()
+
+    if artifact_root.startswith("s3://"):
+        cleaned = artifact_root[5:]
+        parts = cleaned.split("/", 1)
+        bucket = parts[0]
+        key_prefix = parts[1] if len(parts) == 2 else ""
+    else:
+        bucket = os.getenv("ARTIFACTS_S3_BUCKET", "")
+        if not bucket:
+            sys.exit(
+                "ARTIFACTS_S3_BUCKET is required when the KFP run config does not "
+                "include a full s3:// artifact root.\n"
+                f"  artifact_root: {artifact_root}"
+            )
+        key_prefix = artifact_root
+
+    return s3_client, bucket, key_prefix, artifact_root
+
+
+def _refine_prefix_for_run(
+    s3_client: Any,
+    bucket: str,
+    key_prefix: str,
+    run_id: str,
+) -> str:
+    """Narrow ``key_prefix`` to include the run ID when it is not already present.
+
+    KFP's ``pipeline_root`` often points at the pipeline level
+    (``pipeline-name/``) rather than the run level
+    (``pipeline-name/run-id/``).  When that happens, S3 listings return
+    run-ID folders instead of component folders.  This helper checks for
+    the more specific path and returns it when objects exist there.
+    """
+    if run_id in key_prefix:
+        return key_prefix
+
+    from autox_tools.s3.cli import _paginate_objects
+
+    candidate = f"{key_prefix}{run_id}/"
+    probe = _paginate_objects(s3_client, bucket, candidate, max_keys=1)
+    if probe.get("Contents"):
+        return candidate
+    return key_prefix
+
+
+def _download_objects(
+    s3_client: Any,
+    bucket: str,
+    objects: list[dict[str, Any]],
+    base_prefix: str,
+    download_dir: str,
+) -> None:
+    """Download S3 objects to a local directory, preserving relative paths."""
+    from autox_tools.s3.cli import _human_size
+
+    os.makedirs(download_dir, exist_ok=True)
+    downloaded = 0
+    total_bytes = 0
+
+    for obj in objects:
+        key = obj["Key"]
+        if key.endswith("/"):
+            continue
+        rel = key[len(base_prefix):].lstrip("/") if base_prefix else key
+        local_path = os.path.join(download_dir, rel)
+        os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
+        s3_client.download_file(bucket, key, local_path)
+        downloaded += 1
+        total_bytes += obj.get("Size", 0)
+        print(f"  Downloaded: {rel} ({_human_size(obj.get('Size', 0))})")
+
+    print(f"\n  {downloaded} file(s), {_human_size(total_bytes)} total to {download_dir}/")
+
+
+def _cmd_artifacts_pattern(
+    s3_client: Any,
+    bucket: str,
+    key_prefix: str,
+    args: argparse.Namespace,
+) -> None:
+    """Handle ``--pattern`` mode: list or download RAG pattern artifacts."""
+    from autox_tools.s3.cli import _human_size, _paginate_objects
+
+    rag_prefix = _find_rag_patterns_prefix(s3_client, bucket, key_prefix)
+    if not rag_prefix:
+        print("No rag_patterns/ folder found under this run's artifacts.")
+        sys.exit(1)
+
+    patterns = _discover_patterns(s3_client, bucket, rag_prefix)
+    if not patterns:
+        print(f"No patterns found under {rag_prefix}")
+        sys.exit(1)
+
+    if args.pattern == "all":
+        _cmd_artifacts_pattern_all(
+            s3_client, bucket, rag_prefix, patterns, args,
+        )
+        return
+
+    matched = _match_pattern_name(args.pattern, patterns)
+    if not matched:
+        print(f"Pattern '{args.pattern}' not found. Available patterns:")
+        for p in patterns:
+            print(f"  {p}")
+        sys.exit(1)
+
+    if len(matched) > 1 and not args.artifact:
+        print(f"'{args.pattern}' matches multiple patterns:")
+        for p in matched:
+            print(f"  {p}")
+        print("\nSpecify a more precise name.")
+        sys.exit(1)
+
+    pattern_name = matched[0]
+    pattern_prefix = f"{rag_prefix}{pattern_name}/"
+    result = _paginate_objects(s3_client, bucket, pattern_prefix)
+    objects = result.get("Contents", [])
+
+    if args.artifact:
+        _cmd_artifacts_single_file(
+            s3_client, bucket, pattern_prefix, objects,
+            pattern_name, args,
+        )
+        return
+
+    if args.json:
+        _print_json({
+            "pattern": pattern_name,
+            "prefix": pattern_prefix,
+            "total": len(objects),
+            "artifacts": [
+                {"key": o["Key"], "size_bytes": o.get("Size", 0)} for o in objects
+            ],
+        })
+        return
+
+    print(f"Pattern: {pattern_name}")
+    print(f"Prefix : {pattern_prefix}\n")
+    for obj in objects:
+        rel = obj["Key"][len(pattern_prefix):]
+        if not rel:
+            continue
+        print(f"  {rel:<60} {_human_size(obj.get('Size', 0)):>10}")
+    print(f"\n  {len(objects)} artifact(s)")
+
+    if args.download:
+        print()
+        _download_objects(s3_client, bucket, objects, pattern_prefix, args.download)
+
+
+def _cmd_artifacts_pattern_all(
+    s3_client: Any,
+    bucket: str,
+    rag_prefix: str,
+    patterns: list[str],
+    args: argparse.Namespace,
+) -> None:
+    """List all RAG patterns with file counts and sizes."""
+    from autox_tools.s3.cli import _human_size, _paginate_objects
+
+    summaries: list[dict[str, Any]] = []
+    all_objects: list[dict[str, Any]] = []
+
+    for pname in patterns:
+        prefix = f"{rag_prefix}{pname}/"
+        result = _paginate_objects(s3_client, bucket, prefix)
+        objs = result.get("Contents", [])
+        total_size = sum(o.get("Size", 0) for o in objs)
+        summaries.append({
+            "name": pname,
+            "file_count": len(objs),
+            "total_size": total_size,
+        })
+        all_objects.extend(objs)
+
+    if args.json:
+        _print_json({"patterns": summaries, "total_patterns": len(summaries)})
+        return
+
+    max_name = max(len(s["name"]) for s in summaries) if summaries else 10
+    print(f"RAG Patterns ({len(summaries)}):\n")
+    for s in summaries:
+        print(
+            f"  {s['name']:<{max_name}}  "
+            f"{s['file_count']:>5} file(s)  "
+            f"{_human_size(s['total_size']):>10}"
+        )
+
+    total_files = sum(s["file_count"] for s in summaries)
+    total_bytes = sum(s["total_size"] for s in summaries)
+    print(f"\n  Total: {len(summaries)} pattern(s), {total_files} file(s), {_human_size(total_bytes)}")
+
+    if args.download:
+        print()
+        _download_objects(s3_client, bucket, all_objects, rag_prefix, args.download)
+
+
+def _cmd_artifacts_single_file(
+    s3_client: Any,
+    bucket: str,
+    pattern_prefix: str,
+    objects: list[dict[str, Any]],
+    pattern_name: str,
+    args: argparse.Namespace,
+) -> None:
+    """Handle ``--artifact`` mode: show, download, or print a single file."""
+    from autox_tools.s3.cli import _human_size
+
+    query = args.artifact.lower()
+    matches = [
+        o for o in objects
+        if query in os.path.basename(o["Key"]).lower()
+    ]
+    if not matches:
+        print(f"Artifact '{args.artifact}' not found in pattern '{pattern_name}'.")
+        print("Available artifacts:")
+        for o in objects:
+            rel = o["Key"][len(pattern_prefix):]
+            if rel:
+                print(f"  {rel}")
+        sys.exit(1)
+
+    if len(matches) > 1:
+        exact = [o for o in matches if os.path.basename(o["Key"]).lower() == query]
+        if len(exact) == 1:
+            matches = exact
+        else:
+            print(f"'{args.artifact}' matches multiple artifacts:")
+            for o in matches:
+                print(f"  {os.path.basename(o['Key'])}")
+            print("\nSpecify a more precise name.")
+            sys.exit(1)
+
+    obj = matches[0]
+    key = obj["Key"]
+    size = obj.get("Size", 0)
+    filename = os.path.basename(key)
+
+    if args.print_content:
+        response = s3_client.get_object(Bucket=bucket, Key=key)
+        sys.stdout.buffer.write(response["Body"].read())
+        return
+
+    if args.json:
+        _print_json({
+            "pattern": pattern_name,
+            "artifact": filename,
+            "key": key,
+            "size_bytes": size,
+        })
+        return
+
+    print(f"Pattern  : {pattern_name}")
+    print(f"Artifact : {filename} ({_human_size(size)})")
+    print(f"S3 key   : {key}")
+
+    if args.download:
+        local_path = os.path.join(args.download, filename)
+        os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
+        s3_client.download_file(bucket, key, local_path)
+        print(f"\n  Downloaded to {local_path}")
+
+
+def _cmd_artifacts_component(
+    s3_client: Any,
+    bucket: str,
+    key_prefix: str,
+    args: argparse.Namespace,
+) -> None:
+    """Handle ``--component`` mode: list or download a single component's artifacts."""
+    from autox_tools.s3.cli import _human_size, _paginate_objects
+
+    components = _discover_components(s3_client, bucket, key_prefix)
+    if not components:
+        print(f"No component folders found under {key_prefix}")
+        sys.exit(1)
+
+    if args.component == "all":
+        summaries: list[dict[str, Any]] = []
+        for cname in components:
+            prefix = f"{key_prefix}{cname}/"
+            result = _paginate_objects(s3_client, bucket, prefix)
+            objs = result.get("Contents", [])
+            total_size = sum(o.get("Size", 0) for o in objs)
+            summaries.append({
+                "name": cname,
+                "file_count": len(objs),
+                "total_size": total_size,
+            })
+
+        if args.json:
+            _print_json({"components": summaries, "total_components": len(summaries)})
+            return
+
+        max_name = max(len(s["name"]) for s in summaries) if summaries else 10
+        print(f"Components ({len(summaries)}):\n")
+        for s in summaries:
+            print(
+                f"  {s['name']:<{max_name}}  "
+                f"{s['file_count']:>5} file(s)  "
+                f"{_human_size(s['total_size']):>10}"
+            )
+        total_files = sum(s["file_count"] for s in summaries)
+        total_bytes = sum(s["total_size"] for s in summaries)
+        print(f"\n  Total: {len(summaries)} component(s), {total_files} file(s), {_human_size(total_bytes)}")
+        return
+
+    matched = _match_pattern_name(args.component, components)
+    if not matched:
+        print(f"Component '{args.component}' not found. Available components:")
+        for c in components:
+            print(f"  {c}")
+        sys.exit(1)
+
+    if len(matched) > 1:
+        print(f"'{args.component}' matches multiple components:")
+        for c in matched:
+            print(f"  {c}")
+        print("\nSpecify a more precise name.")
+        sys.exit(1)
+
+    comp_name = matched[0]
+    comp_prefix = f"{key_prefix}{comp_name}/"
+    result = _paginate_objects(s3_client, bucket, comp_prefix)
+    objects = result.get("Contents", [])
+
+    if args.json:
+        _print_json({
+            "component": comp_name,
+            "prefix": comp_prefix,
+            "total": len(objects),
+            "artifacts": [
+                {"key": o["Key"], "size_bytes": o.get("Size", 0)} for o in objects
+            ],
+        })
+        return
+
+    print(f"Component: {comp_name}")
+    print(f"Prefix   : {comp_prefix}\n")
+    for obj in objects:
+        rel = obj["Key"][len(comp_prefix):]
+        if not rel:
+            continue
+        print(f"  {rel:<60} {_human_size(obj.get('Size', 0)):>10}")
+    print(f"\n  {len(objects)} artifact(s)")
+
+    if args.download:
+        print()
+        _download_objects(s3_client, bucket, objects, comp_prefix, args.download)
+
+
 def cmd_artifacts(kfp_client: Any, args: argparse.Namespace, **_: Any) -> None:
-    """List S3 artifacts from a pipeline run."""
+    """List or download S3 artifacts from a pipeline run."""
     run = kfp_client.get_run(args.run_id)
     run_obj = getattr(run, "run", run)
     pipeline_name = _get_pipeline_name(run_obj) or "unknown"
 
-    runtime_config = getattr(run_obj, "runtime_config", None)
-    artifact_root = None
-    if runtime_config:
-        params = getattr(runtime_config, "parameters", {}) or {}
-        if isinstance(params, dict):
-            artifact_root = params.get("output", None)
-
-    if not artifact_root:
-        artifact_root = f"artifacts/{pipeline_name}/{args.run_id}/"
-
-    s3_endpoint = os.getenv("AWS_S3_ENDPOINT")
-    if not s3_endpoint:
+    has_s3 = bool(os.getenv("ARTIFACTS_AWS_S3_ENDPOINT"))
+    if not has_s3 and not args.pattern and not args.component:
+        runtime_config = getattr(run_obj, "runtime_config", None)
+        artifact_root = None
+        if runtime_config:
+            artifact_root = getattr(runtime_config, "pipeline_root", None)
         if args.json:
             _print_json({
                 "run_id": args.run_id,
                 "artifact_root": artifact_root,
-                "note": "S3 credentials not configured; showing artifact references only.",
-                "artifacts": [],
+                "note": "Artifacts S3 credentials not configured.",
             })
         else:
-            print(f"Artifact root: {artifact_root}")
+            print(f"Artifact root: {artifact_root or 'unknown'}")
             print(
-            "S3 credentials not configured -- set AWS_S3_ENDPOINT, "
-            "AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY to list actual objects."
-        )
+                "Artifacts S3 credentials not configured -- set ARTIFACTS_AWS_S3_ENDPOINT, "
+                "ARTIFACTS_AWS_ACCESS_KEY_ID, and ARTIFACTS_AWS_SECRET_ACCESS_KEY."
+            )
         return
 
-    from autox_tools.s3._client import connect as s3_connect
-    s3_client = s3_connect()
+    s3_client, bucket, key_prefix, artifact_root = _resolve_artifact_s3(
+        run_obj, pipeline_name,
+    )
+    key_prefix = _refine_prefix_for_run(s3_client, bucket, key_prefix, args.run_id)
 
-    cleaned = artifact_root.removeprefix("s3://")
-    prefix = cleaned.split("/", 1)
-    if len(prefix) == 2:
-        bucket, key_prefix = prefix
-    else:
-        bucket = prefix[0]
-        key_prefix = ""
+    if args.component:
+        if args.pattern or args.artifact or args.print_content:
+            sys.exit("--component cannot be combined with --pattern, --artifact, or --print.")
+        _cmd_artifacts_component(s3_client, bucket, key_prefix, args)
+        return
 
-    try:
-        from autox_tools.s3.cli import _paginate_objects
-        result = _paginate_objects(s3_client, bucket, key_prefix)
-    except Exception as exc:
-        sys.exit(f"Failed to list S3 objects: {exc}")
+    if args.pattern:
+        _cmd_artifacts_pattern(s3_client, bucket, key_prefix, args)
+        return
 
+    if args.artifact:
+        sys.exit("--artifact requires --pattern. Usage: --pattern <name> --artifact <file>")
+
+    if args.print_content:
+        sys.exit("--print requires --pattern and --artifact.")
+
+    _cmd_artifacts_summary(s3_client, bucket, key_prefix, args)
+
+
+def _cmd_artifacts_summary(
+    s3_client: Any,
+    bucket: str,
+    key_prefix: str,
+    args: argparse.Namespace,
+) -> None:
+    """Default mode: show a summary of artifacts with category counts."""
+    from autox_tools.s3.cli import _human_size, _paginate_objects
+
+    result = _paginate_objects(s3_client, bucket, key_prefix)
     objects = result.get("Contents", [])
 
-    categories: dict[str, list[dict[str, Any]]] = {
-        "evaluation": [],
-        "indexing_notebooks": [],
-        "inference_notebooks": [],
-        "leaderboard": [],
-        "rag_patterns": [],
-        "other": [],
-    }
+    categories: dict[str, int] = {k: 0 for k in _CATEGORY_LABELS}
+    cat_sizes: dict[str, int] = {k: 0 for k in _CATEGORY_LABELS}
 
     for obj in objects:
-        key = obj["Key"]
-        size = obj.get("Size", 0)
-        entry = {"key": key, "size_bytes": size}
+        cat = _categorize_object(obj["Key"])
+        categories[cat] += 1
+        cat_sizes[cat] += obj.get("Size", 0)
 
-        if "evaluation_results.json" in key:
-            categories["evaluation"].append(entry)
-        elif key.endswith(".ipynb") and "indexing" in key.lower():
-            categories["indexing_notebooks"].append(entry)
-        elif key.endswith(".ipynb") and "inference" in key.lower():
-            categories["inference_notebooks"].append(entry)
-        elif key.endswith(".html") or "leaderboard" in key.lower():
-            categories["leaderboard"].append(entry)
-        elif "pattern.json" in key or "rag_patterns" in key.lower():
-            categories["rag_patterns"].append(entry)
-        else:
-            categories["other"].append(entry)
+    rag_prefix = _find_rag_patterns_prefix(s3_client, bucket, key_prefix)
+    patterns: list[str] = []
+    if rag_prefix:
+        patterns = _discover_patterns(s3_client, bucket, rag_prefix)
+
+    total_size = sum(cat_sizes.values())
 
     if args.json:
         _print_json({
             "run_id": args.run_id,
             "bucket": bucket,
             "prefix": key_prefix,
-            "total": len(objects),
-            "categories": categories,
+            "total_artifacts": len(objects),
+            "total_size": total_size,
+            "categories": {
+                k: {"count": categories[k], "size": cat_sizes[k]}
+                for k in _CATEGORY_LABELS
+            },
+            "patterns": patterns,
         })
         return
 
     print(f"Artifacts for run {args.run_id}")
     print(f"Bucket: {bucket}  Prefix: {key_prefix}\n")
 
-    from autox_tools.s3.cli import _human_size
-
-    category_labels = {
-        "evaluation": "Evaluation Results",
-        "indexing_notebooks": "Indexing Notebooks",
-        "inference_notebooks": "Inference Notebooks",
-        "leaderboard": "Leaderboard",
-        "rag_patterns": "RAG Patterns",
-        "other": "Other",
-    }
-
-    total_shown = 0
-    for cat_key, label in category_labels.items():
-        items = categories[cat_key]
-        if not items:
+    for cat_key, label in _CATEGORY_LABELS.items():
+        count = categories[cat_key]
+        if not count:
             continue
-        print(f"  {label} ({len(items)}):")
-        for item in items:
-            print(f"    {item['key']}  ({_human_size(item['size_bytes'])})")
-        total_shown += len(items)
-        print()
+        print(f"  {label:<25} {count:>6} file(s)  {_human_size(cat_sizes[cat_key]):>10}")
 
-    if total_shown == 0:
-        print("  No artifacts found.")
-    else:
-        print(f"  Total: {total_shown} artifact(s)")
+    print(f"\n  Total: {len(objects)} artifact(s), {_human_size(total_size)}")
+
+    if patterns:
+        print(f"\n  RAG Patterns ({len(patterns)}):")
+        for p in patterns:
+            print(f"    {p}")
+        print("\n  Use --pattern <name> to browse, --pattern all to list all.")
 
     if args.download:
-        download_dir = args.download
-        os.makedirs(download_dir, exist_ok=True)
-        downloaded = 0
-        total_bytes = 0
-        for obj in objects:
-            key = obj["Key"]
-            if key.endswith("/"):
-                continue
-            rel = key[len(key_prefix):].lstrip("/") if key_prefix else key
-            local_path = os.path.join(download_dir, rel)
-            os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
-            s3_client.download_file(bucket, key, local_path)
-            downloaded += 1
-            total_bytes += obj.get("Size", 0)
-            print(f"  Downloaded: {rel} ({_human_size(obj.get('Size', 0))})")
-
-        print(f"\n  Downloaded {downloaded} file(s), {_human_size(total_bytes)} total to {download_dir}/")
+        if len(objects) > 1000:
+            print(f"\n  Downloading {len(objects)} objects...")
+        print()
+        _download_objects(s3_client, bucket, objects, key_prefix, args.download)
 
 
 # ---------------------------------------------------------------------------
@@ -759,7 +1238,23 @@ def _build_parser() -> argparse.ArgumentParser:
     # artifacts
     p = sub.add_parser("artifacts", help="List S3 artifacts from a run")
     p.add_argument("run_id", help="KFP run ID (UUID)")
-    p.add_argument("--download", metavar="DIR", help="Download all artifacts to directory")
+    p.add_argument(
+        "--component",
+        help="Pipeline component name or 'all' (e.g. --component search-space-optimization)",
+    )
+    p.add_argument(
+        "--pattern",
+        help="RAG pattern name or 'all' (e.g. --pattern Pattern1, --pattern all)",
+    )
+    p.add_argument(
+        "--artifact",
+        help="Artifact filename within a pattern (requires --pattern)",
+    )
+    p.add_argument(
+        "--print", action="store_true", default=False, dest="print_content",
+        help="Output artifact content to stdout (requires --pattern and --artifact)",
+    )
+    p.add_argument("--download", metavar="DIR", help="Download artifacts to directory")
 
     return parser
 

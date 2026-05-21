@@ -9,13 +9,12 @@ import argparse
 import os
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from autox_tools.pipelines import _filters
-from autox_tools.pipelines import cli
-
+from autox_tools.pipelines import _filters, cli
 
 # ---------------------------------------------------------------------------
 # _filters.py tests
@@ -626,34 +625,713 @@ class TestCmdLogs:
 # cmd_artifacts (no S3 configured)
 # ---------------------------------------------------------------------------
 
+def _artifacts_ns(**overrides: Any) -> argparse.Namespace:
+    """Build a Namespace for cmd_artifacts with defaults for all flags."""
+    defaults: dict[str, Any] = {
+        "run_id": "test-id", "component": None, "pattern": None,
+        "artifact": None, "download": None, "print_content": False,
+        "json": False,
+    }
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
+
+
 class TestCmdArtifactsNoS3:
-    def test_warns_without_s3_credentials(self, capsys):
+    def test_warns_without_artifacts_s3_credentials(self, capsys):
         run = _make_run(state="Succeeded")
         client = MagicMock()
         client.get_run.return_value = run
 
         with patch.dict(os.environ, {}, clear=True):
-            os.environ.pop("AWS_S3_ENDPOINT", None)
-            args = argparse.Namespace(run_id="test-id", download=None, json=False)
-            cli.cmd_artifacts(client, args)
+            os.environ.pop("ARTIFACTS_AWS_S3_ENDPOINT", None)
+            cli.cmd_artifacts(client, _artifacts_ns())
 
         out = capsys.readouterr().out
-        assert "S3 credentials not configured" in out
+        assert "Artifacts S3 credentials not configured" in out
+        assert "ARTIFACTS_AWS_S3_ENDPOINT" in out
 
-    def test_json_without_s3(self, capsys):
+    def test_json_without_artifacts_s3(self, capsys):
         run = _make_run(state="Succeeded")
         client = MagicMock()
         client.get_run.return_value = run
 
         with patch.dict(os.environ, {}, clear=True):
-            os.environ.pop("AWS_S3_ENDPOINT", None)
-            args = argparse.Namespace(run_id="test-id", download=None, json=True)
-            cli.cmd_artifacts(client, args)
+            os.environ.pop("ARTIFACTS_AWS_S3_ENDPOINT", None)
+            cli.cmd_artifacts(client, _artifacts_ns(json=True))
 
         import json
         result = json.loads(capsys.readouterr().out)
         assert "artifact_root" in result
         assert result["note"] is not None
+
+    def test_missing_bucket_without_s3_uri(self):
+        """Exit with clear error when artifact_root has no s3:// and ARTIFACTS_S3_BUCKET is unset."""
+        run = _make_run(state="Succeeded")
+        client = MagicMock()
+        client.get_run.return_value = run
+
+        env = {
+            "ARTIFACTS_AWS_S3_ENDPOINT": "https://s3.amazonaws.com/",
+            "ARTIFACTS_AWS_ACCESS_KEY_ID": "key",
+            "ARTIFACTS_AWS_SECRET_ACCESS_KEY": "secret",
+        }
+        with patch.dict(os.environ, env, clear=True), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             pytest.raises(SystemExit, match="ARTIFACTS_S3_BUCKET is required"):
+            cli.cmd_artifacts(client, _artifacts_ns())
+
+    def test_artifact_flag_without_pattern_exits(self):
+        """--artifact without --pattern should exit with usage hint."""
+        run = _make_run(state="Succeeded")
+        client = MagicMock()
+        client.get_run.return_value = run
+
+        env = {
+            "ARTIFACTS_AWS_S3_ENDPOINT": "https://s3.example.com/",
+            "ARTIFACTS_AWS_ACCESS_KEY_ID": "key",
+            "ARTIFACTS_AWS_SECRET_ACCESS_KEY": "secret",
+            "ARTIFACTS_S3_BUCKET": "bucket",
+        }
+        with patch.dict(os.environ, env, clear=True), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             pytest.raises(SystemExit, match="--artifact requires --pattern"):
+            cli.cmd_artifacts(client, _artifacts_ns(artifact="eval.json"))
+
+
+# ---------------------------------------------------------------------------
+# _artifacts_s3.py tests
+# ---------------------------------------------------------------------------
+
+class TestArtifactsS3Connect:
+    def test_missing_env_vars_exits(self):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             pytest.raises(SystemExit, match="Missing required environment variables"):
+            from autox_tools.pipelines._artifacts_s3 import connect
+            connect()
+
+    def test_connect_builds_client(self):
+        env = {
+            "ARTIFACTS_AWS_S3_ENDPOINT": "https://artifacts-minio.example.com",
+            "ARTIFACTS_AWS_ACCESS_KEY_ID": "art-key",
+            "ARTIFACTS_AWS_SECRET_ACCESS_KEY": "art-secret",
+        }
+        with patch.dict(os.environ, env, clear=True), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3") as mock_boto3:
+            from autox_tools.pipelines._artifacts_s3 import connect
+            connect()
+            _, kwargs = mock_boto3.client.call_args
+            assert kwargs["endpoint_url"] == "https://artifacts-minio.example.com"
+            assert kwargs["aws_access_key_id"] == "art-key"
+            assert kwargs["aws_secret_access_key"] == "art-secret"
+            assert kwargs["region_name"] == "us-east-1"
+            assert kwargs["verify"] is True
+            assert kwargs["config"].s3["addressing_style"] == "path"
+
+    def test_connect_tls_disabled(self):
+        env = {
+            "ARTIFACTS_AWS_S3_ENDPOINT": "https://artifacts-minio.example.com",
+            "ARTIFACTS_AWS_ACCESS_KEY_ID": "art-key",
+            "ARTIFACTS_AWS_SECRET_ACCESS_KEY": "art-secret",
+            "ARTIFACTS_S3_VERIFY_TLS": "false",
+        }
+        with patch.dict(os.environ, env, clear=True), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3") as mock_boto3:
+            from autox_tools.pipelines._artifacts_s3 import connect
+            connect()
+            _, kwargs = mock_boto3.client.call_args
+            assert kwargs["verify"] is False
+
+    def test_connect_custom_region(self):
+        env = {
+            "ARTIFACTS_AWS_S3_ENDPOINT": "https://artifacts-minio.example.com",
+            "ARTIFACTS_AWS_ACCESS_KEY_ID": "art-key",
+            "ARTIFACTS_AWS_SECRET_ACCESS_KEY": "art-secret",
+            "ARTIFACTS_AWS_DEFAULT_REGION": "eu-west-1",
+        }
+        with patch.dict(os.environ, env, clear=True), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3") as mock_boto3:
+            from autox_tools.pipelines._artifacts_s3 import connect
+            connect()
+            _, kwargs = mock_boto3.client.call_args
+            assert kwargs["region_name"] == "eu-west-1"
+
+
+# ---------------------------------------------------------------------------
+# Pattern discovery and filtering
+# ---------------------------------------------------------------------------
+
+class TestCategorizeObject:
+    @pytest.mark.parametrize("key,expected", [
+        ("prefix/evaluation_results.json", "evaluation"),
+        ("prefix/indexing_notebook.ipynb", "indexing_notebooks"),
+        ("prefix/inference_notebook.ipynb", "inference_notebooks"),
+        ("prefix/leaderboard.html", "leaderboard"),
+        ("prefix/results/leaderboard_v2.json", "leaderboard"),
+        ("prefix/rag_patterns/P1/pattern.json", "rag_patterns"),
+        ("prefix/rag_patterns/P1/some_file.txt", "rag_patterns"),
+        ("prefix/other/random.csv", "other"),
+    ])
+    def test_categorization(self, key, expected):
+        assert cli._categorize_object(key) == expected
+
+    @pytest.mark.parametrize("key", [
+        "prefix/rag_patterns/P1/evaluation_results.json",
+        "prefix/rag_patterns/P1/inference_notebook.ipynb",
+        "prefix/rag_patterns/P1/indexing_notebook.ipynb",
+        "prefix/rag_patterns/P1/leaderboard.html",
+    ])
+    def test_rag_patterns_takes_priority(self, key):
+        """Files inside rag_patterns/ are always categorized as rag_patterns."""
+        assert cli._categorize_object(key) == "rag_patterns"
+
+
+class TestFindRagPatternsPrefix:
+    def test_finds_prefix_from_keys(self):
+        objects = [
+            {"Key": "pipe/run-1/comp/task-id/rag_patterns/P1/file.json", "Size": 100},
+        ]
+        s3 = MagicMock()
+        with patch("autox_tools.s3.cli._paginate_objects", return_value={"Contents": objects}):
+            result = cli._find_rag_patterns_prefix(s3, "bucket", "pipe/run-1/")
+        assert result == "pipe/run-1/comp/task-id/rag_patterns/"
+
+    def test_returns_none_when_not_found(self):
+        objects = [{"Key": "pipe/run-1/other/file.csv", "Size": 50}]
+        s3 = MagicMock()
+        with patch("autox_tools.s3.cli._paginate_objects", return_value={"Contents": objects}):
+            result = cli._find_rag_patterns_prefix(s3, "bucket", "pipe/run-1/")
+        assert result is None
+
+    def test_returns_none_on_empty(self):
+        s3 = MagicMock()
+        with patch("autox_tools.s3.cli._paginate_objects", return_value={"Contents": []}):
+            result = cli._find_rag_patterns_prefix(s3, "bucket", "pipe/run-1/")
+        assert result is None
+
+
+class TestDiscoverPatterns:
+    def test_extracts_pattern_names(self):
+        s3 = MagicMock()
+        common_prefixes = [
+            {"Prefix": "base/rag_patterns/Pattern_1/"},
+            {"Prefix": "base/rag_patterns/Pattern_2/"},
+            {"Prefix": "base/rag_patterns/Default/"},
+        ]
+        with patch("autox_tools.s3.cli._paginate_objects",
+                    return_value={"CommonPrefixes": common_prefixes}):
+            result = cli._discover_patterns(s3, "bucket", "base/rag_patterns/")
+        assert result == ["Default", "Pattern_1", "Pattern_2"]
+
+    def test_empty_when_no_prefixes(self):
+        s3 = MagicMock()
+        with patch("autox_tools.s3.cli._paginate_objects",
+                    return_value={"CommonPrefixes": []}):
+            result = cli._discover_patterns(s3, "bucket", "base/rag_patterns/")
+        assert result == []
+
+
+class TestMatchPatternName:
+    def test_exact_match(self):
+        assert cli._match_pattern_name("Pattern_1", ["Pattern_1", "Pattern_2"]) == ["Pattern_1"]
+
+    def test_case_insensitive(self):
+        assert cli._match_pattern_name("pattern_1", ["Pattern_1", "Pattern_2"]) == ["Pattern_1"]
+
+    def test_substring(self):
+        result = cli._match_pattern_name("Pattern", ["Pattern_1", "Pattern_2", "Default"])
+        assert set(result) == {"Pattern_1", "Pattern_2"}
+
+    def test_no_match(self):
+        assert cli._match_pattern_name("missing", ["Pattern_1", "Pattern_2"]) == []
+
+    def test_exact_preferred(self):
+        assert cli._match_pattern_name("Default", ["Default", "DefaultV2"]) == ["Default"]
+
+
+_ARTIFACTS_ENV = {
+    "ARTIFACTS_AWS_S3_ENDPOINT": "https://s3.example.com/",
+    "ARTIFACTS_AWS_ACCESS_KEY_ID": "key",
+    "ARTIFACTS_AWS_SECRET_ACCESS_KEY": "secret",
+}
+
+
+def _mock_s3_run():
+    """Create a mock KFP run with s3:// artifact root."""
+    run_obj = SimpleNamespace(
+        run_id="run-1",
+        state="Succeeded",
+        created_at=None,
+        finished_at=None,
+        error=None,
+        display_name="test-run",
+        name="test-run",
+        pipeline_spec={"pipeline_name": "my-pipeline"},
+        runtime_config=SimpleNamespace(
+            pipeline_root="s3://test-bucket/pipeline/run-1/",
+            parameters={},
+        ),
+    )
+    return SimpleNamespace(run=run_obj, run_details=SimpleNamespace(task_details=[]))
+
+
+class TestCmdArtifactsSummary:
+    def test_summary_shows_category_counts(self, capsys):
+        """Default mode should show category counts, not individual file listings."""
+        objects = [
+            {"Key": "pipeline/run-1/eval/evaluation_results.json", "Size": 1000},
+            {"Key": "pipeline/run-1/comp/id/rag_patterns/P1/pattern.json", "Size": 500},
+            {"Key": "pipeline/run-1/comp/id/rag_patterns/P1/other.csv", "Size": 200},
+            {"Key": "pipeline/run-1/leaderboard.html", "Size": 300},
+            {"Key": "pipeline/run-1/random.txt", "Size": 50},
+        ]
+        kfp_client = MagicMock()
+        kfp_client.get_run.return_value = _mock_s3_run()
+
+        with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             patch("autox_tools.s3.cli._paginate_objects",
+                    return_value={"Contents": objects, "CommonPrefixes": []}), \
+             patch("autox_tools.pipelines.cli._find_rag_patterns_prefix",
+                    return_value="pipeline/run-1/comp/id/rag_patterns/"), \
+             patch("autox_tools.pipelines.cli._discover_patterns",
+                    return_value=["P1"]):
+            cli.cmd_artifacts(kfp_client, _artifacts_ns())
+
+        out = capsys.readouterr().out
+        assert "Evaluation Results" in out
+        assert "RAG Patterns" in out
+        assert "5 artifact(s)" in out
+        assert "P1" in out
+        assert "--pattern" in out
+
+    def test_summary_json(self, capsys):
+        objects = [
+            {"Key": "pipeline/run-1/eval/evaluation_results.json", "Size": 1000},
+        ]
+        kfp_client = MagicMock()
+        kfp_client.get_run.return_value = _mock_s3_run()
+
+        with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             patch("autox_tools.s3.cli._paginate_objects",
+                    return_value={"Contents": objects, "CommonPrefixes": []}), \
+             patch("autox_tools.pipelines.cli._find_rag_patterns_prefix",
+                    return_value=None), \
+             patch("autox_tools.pipelines.cli._discover_patterns",
+                    return_value=[]):
+            cli.cmd_artifacts(kfp_client, _artifacts_ns(json=True))
+
+        import json
+        result = json.loads(capsys.readouterr().out)
+        assert result["total_artifacts"] == 1
+        assert result["categories"]["evaluation"]["count"] == 1
+        assert result["patterns"] == []
+
+
+class TestCmdArtifactsPattern:
+    def _setup_pattern_mocks(self, capsys):
+        """Return mocks and patches for pattern-mode tests."""
+        kfp_client = MagicMock()
+        kfp_client.get_run.return_value = _mock_s3_run()
+        return kfp_client
+
+    def test_pattern_single_lists_files(self, capsys):
+        kfp_client = self._setup_pattern_mocks(capsys)
+        pattern_objects = [
+            {"Key": "base/rag_patterns/P1/pattern.json", "Size": 500},
+            {"Key": "base/rag_patterns/P1/evaluation_results.json", "Size": 1000},
+            {"Key": "base/rag_patterns/P1/notebook.ipynb", "Size": 2000},
+        ]
+
+        with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             patch("autox_tools.pipelines.cli._find_rag_patterns_prefix",
+                    return_value="base/rag_patterns/"), \
+             patch("autox_tools.pipelines.cli._discover_patterns",
+                    return_value=["P1", "P2"]), \
+             patch("autox_tools.s3.cli._paginate_objects",
+                    return_value={"Contents": pattern_objects, "CommonPrefixes": []}):
+            cli.cmd_artifacts(kfp_client, _artifacts_ns(pattern="P1"))
+
+        out = capsys.readouterr().out
+        assert "Pattern: P1" in out
+        assert "pattern.json" in out
+        assert "evaluation_results.json" in out
+        assert "3 artifact(s)" in out
+
+    def test_pattern_all_shows_summaries(self, capsys):
+        kfp_client = self._setup_pattern_mocks(capsys)
+
+        def mock_paginate(client, bucket, prefix, **kw):
+            if "P1/" in prefix:
+                return {"Contents": [{"Key": f"{prefix}f1", "Size": 100}], "CommonPrefixes": []}
+            if "P2/" in prefix:
+                return {"Contents": [
+                    {"Key": f"{prefix}f1", "Size": 200},
+                    {"Key": f"{prefix}f2", "Size": 300},
+                ], "CommonPrefixes": []}
+            return {"Contents": [], "CommonPrefixes": []}
+
+        with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             patch("autox_tools.pipelines.cli._find_rag_patterns_prefix",
+                    return_value="base/rag_patterns/"), \
+             patch("autox_tools.pipelines.cli._discover_patterns",
+                    return_value=["P1", "P2"]), \
+             patch("autox_tools.s3.cli._paginate_objects", side_effect=mock_paginate):
+            cli.cmd_artifacts(kfp_client, _artifacts_ns(pattern="all"))
+
+        out = capsys.readouterr().out
+        assert "P1" in out
+        assert "P2" in out
+        assert "2 pattern(s)" in out
+
+    def test_pattern_not_found_exits(self, capsys):
+        kfp_client = self._setup_pattern_mocks(capsys)
+
+        with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             patch("autox_tools.pipelines.cli._find_rag_patterns_prefix",
+                    return_value="base/rag_patterns/"), \
+             patch("autox_tools.pipelines.cli._discover_patterns",
+                    return_value=["P1", "P2"]), \
+             pytest.raises(SystemExit):
+            cli.cmd_artifacts(kfp_client, _artifacts_ns(pattern="nonexistent"))
+
+        out = capsys.readouterr().out
+        assert "P1" in out
+        assert "P2" in out
+
+    def test_artifact_downloads_single_file(self, capsys, tmp_path):
+        kfp_client = self._setup_pattern_mocks(capsys)
+        pattern_objects = [
+            {"Key": "base/rag_patterns/P1/pattern.json", "Size": 500},
+            {"Key": "base/rag_patterns/P1/evaluation_results.json", "Size": 1000},
+        ]
+
+        mock_s3 = MagicMock()
+
+        with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3") as mock_boto3, \
+             patch("autox_tools.pipelines.cli._find_rag_patterns_prefix",
+                    return_value="base/rag_patterns/"), \
+             patch("autox_tools.pipelines.cli._discover_patterns",
+                    return_value=["P1"]), \
+             patch("autox_tools.s3.cli._paginate_objects",
+                    return_value={"Contents": pattern_objects, "CommonPrefixes": []}):
+            mock_boto3.client.return_value = mock_s3
+            cli.cmd_artifacts(
+                kfp_client,
+                _artifacts_ns(pattern="P1", artifact="evaluation_results", download=str(tmp_path)),
+            )
+
+        out = capsys.readouterr().out
+        assert "evaluation_results.json" in out
+        assert "Downloaded" in out
+        mock_s3.download_file.assert_called_once()
+
+    def test_artifact_not_found_shows_available(self, capsys):
+        kfp_client = self._setup_pattern_mocks(capsys)
+        pattern_objects = [
+            {"Key": "base/rag_patterns/P1/pattern.json", "Size": 500},
+        ]
+
+        with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             patch("autox_tools.pipelines.cli._find_rag_patterns_prefix",
+                    return_value="base/rag_patterns/"), \
+             patch("autox_tools.pipelines.cli._discover_patterns",
+                    return_value=["P1"]), \
+             patch("autox_tools.s3.cli._paginate_objects",
+                    return_value={"Contents": pattern_objects, "CommonPrefixes": []}), \
+             pytest.raises(SystemExit):
+            cli.cmd_artifacts(
+                kfp_client,
+                _artifacts_ns(pattern="P1", artifact="nonexistent"),
+            )
+
+        out = capsys.readouterr().out
+        assert "pattern.json" in out
+
+    def test_artifact_without_download_shows_metadata_only(self, capsys):
+        """--artifact without --download should show metadata, not download."""
+        kfp_client = self._setup_pattern_mocks(capsys)
+        pattern_objects = [
+            {"Key": "base/rag_patterns/P1/pattern.json", "Size": 500},
+        ]
+
+        mock_s3 = MagicMock()
+
+        with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3") as mock_boto3, \
+             patch("autox_tools.pipelines.cli._find_rag_patterns_prefix",
+                    return_value="base/rag_patterns/"), \
+             patch("autox_tools.pipelines.cli._discover_patterns",
+                    return_value=["P1"]), \
+             patch("autox_tools.s3.cli._paginate_objects",
+                    return_value={"Contents": pattern_objects, "CommonPrefixes": []}):
+            mock_boto3.client.return_value = mock_s3
+            cli.cmd_artifacts(
+                kfp_client,
+                _artifacts_ns(pattern="P1", artifact="pattern.json"),
+            )
+
+        out = capsys.readouterr().out
+        assert "pattern.json" in out
+        assert "S3 key" in out
+        assert "Downloaded" not in out
+        mock_s3.download_file.assert_not_called()
+
+    def test_artifact_print_outputs_to_stdout(self, capsys):
+        """--print should fetch the S3 object and write its content to stdout."""
+        kfp_client = self._setup_pattern_mocks(capsys)
+        pattern_objects = [
+            {"Key": "base/rag_patterns/P1/pattern.json", "Size": 42},
+        ]
+
+        body_mock = MagicMock()
+        body_mock.read.return_value = b'{"key": "value"}'
+        mock_s3 = MagicMock()
+        mock_s3.get_object.return_value = {"Body": body_mock}
+
+        with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3") as mock_boto3, \
+             patch("autox_tools.pipelines.cli._find_rag_patterns_prefix",
+                    return_value="base/rag_patterns/"), \
+             patch("autox_tools.pipelines.cli._discover_patterns",
+                    return_value=["P1"]), \
+             patch("autox_tools.s3.cli._paginate_objects",
+                    return_value={"Contents": pattern_objects, "CommonPrefixes": []}):
+            mock_boto3.client.return_value = mock_s3
+            cli.cmd_artifacts(
+                kfp_client,
+                _artifacts_ns(pattern="P1", artifact="pattern.json", print_content=True),
+            )
+
+        mock_s3.get_object.assert_called_once_with(
+            Bucket="test-bucket",
+            Key="base/rag_patterns/P1/pattern.json",
+        )
+
+    def test_no_rag_patterns_folder_exits(self, capsys):
+        kfp_client = self._setup_pattern_mocks(capsys)
+
+        with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             patch("autox_tools.pipelines.cli._find_rag_patterns_prefix",
+                    return_value=None), \
+             pytest.raises(SystemExit):
+            cli.cmd_artifacts(kfp_client, _artifacts_ns(pattern="P1"))
+
+
+# ---------------------------------------------------------------------------
+# _discover_components and --component mode
+# ---------------------------------------------------------------------------
+
+class TestRefinePrefixForRun:
+    def test_appends_run_id_when_objects_exist(self):
+        s3 = MagicMock()
+        with patch("autox_tools.s3.cli._paginate_objects",
+                    return_value={"Contents": [{"Key": "pipe/run-1/comp/f", "Size": 1}]}):
+            result = cli._refine_prefix_for_run(s3, "bucket", "pipe/", "run-1")
+        assert result == "pipe/run-1/"
+
+    def test_keeps_original_when_no_objects(self):
+        s3 = MagicMock()
+        with patch("autox_tools.s3.cli._paginate_objects",
+                    return_value={"Contents": []}):
+            result = cli._refine_prefix_for_run(s3, "bucket", "pipe/", "run-1")
+        assert result == "pipe/"
+
+    def test_noop_when_run_id_already_in_prefix(self):
+        s3 = MagicMock()
+        result = cli._refine_prefix_for_run(s3, "bucket", "pipe/run-1/", "run-1")
+        assert result == "pipe/run-1/"
+
+
+class TestDiscoverComponents:
+    def test_extracts_component_names(self):
+        s3 = MagicMock()
+        common_prefixes = [
+            {"Prefix": "pipeline/run-1/rag-templates-optimization/"},
+            {"Prefix": "pipeline/run-1/search-space-optimization/"},
+            {"Prefix": "pipeline/run-1/data-preprocessing/"},
+        ]
+        with patch("autox_tools.s3.cli._paginate_objects",
+                    return_value={"CommonPrefixes": common_prefixes}):
+            result = cli._discover_components(s3, "bucket", "pipeline/run-1/")
+        assert result == ["data-preprocessing", "rag-templates-optimization", "search-space-optimization"]
+
+    def test_empty_when_no_prefixes(self):
+        s3 = MagicMock()
+        with patch("autox_tools.s3.cli._paginate_objects",
+                    return_value={"CommonPrefixes": []}):
+            result = cli._discover_components(s3, "bucket", "pipeline/run-1/")
+        assert result == []
+
+
+class TestCmdArtifactsComponent:
+    def _setup_mocks(self):
+        kfp_client = MagicMock()
+        kfp_client.get_run.return_value = _mock_s3_run()
+        return kfp_client
+
+    def test_component_lists_files(self, capsys):
+        kfp_client = self._setup_mocks()
+        comp_objects = [
+            {"Key": "pipeline/run-1/search-space/id1/file1.json", "Size": 100},
+            {"Key": "pipeline/run-1/search-space/id1/file2.csv", "Size": 200},
+        ]
+
+        with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             patch("autox_tools.pipelines.cli._discover_components",
+                    return_value=["rag-templates-optimization", "search-space"]), \
+             patch("autox_tools.s3.cli._paginate_objects",
+                    return_value={"Contents": comp_objects, "CommonPrefixes": []}):
+            cli.cmd_artifacts(kfp_client, _artifacts_ns(component="search-space"))
+
+        out = capsys.readouterr().out
+        assert "Component: search-space" in out
+        assert "file1.json" in out
+        assert "file2.csv" in out
+        assert "2 artifact(s)" in out
+
+    def test_component_all_shows_summaries(self, capsys):
+        kfp_client = self._setup_mocks()
+
+        def mock_paginate(client, bucket, prefix, **kw):
+            if "rag-templates" in prefix:
+                return {"Contents": [{"Key": f"{prefix}f1", "Size": 500}], "CommonPrefixes": []}
+            if "search-space" in prefix:
+                return {"Contents": [
+                    {"Key": f"{prefix}f1", "Size": 100},
+                    {"Key": f"{prefix}f2", "Size": 200},
+                ], "CommonPrefixes": []}
+            return {"Contents": [], "CommonPrefixes": []}
+
+        with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             patch("autox_tools.pipelines.cli._discover_components",
+                    return_value=["rag-templates-optimization", "search-space"]), \
+             patch("autox_tools.s3.cli._paginate_objects", side_effect=mock_paginate):
+            cli.cmd_artifacts(kfp_client, _artifacts_ns(component="all"))
+
+        out = capsys.readouterr().out
+        assert "rag-templates-optimization" in out
+        assert "search-space" in out
+        assert "2 component(s)" in out
+
+    def test_component_not_found_exits(self, capsys):
+        kfp_client = self._setup_mocks()
+
+        with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             patch("autox_tools.pipelines.cli._discover_components",
+                    return_value=["rag-templates-optimization", "search-space"]), \
+             pytest.raises(SystemExit):
+            cli.cmd_artifacts(kfp_client, _artifacts_ns(component="nonexistent"))
+
+        out = capsys.readouterr().out
+        assert "rag-templates-optimization" in out
+        assert "search-space" in out
+
+    def test_component_with_download(self, capsys, tmp_path):
+        kfp_client = self._setup_mocks()
+        comp_objects = [
+            {"Key": "pipeline/run-1/search-space/id1/file1.json", "Size": 100},
+        ]
+        mock_s3 = MagicMock()
+
+        with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3") as mock_boto3, \
+             patch("autox_tools.pipelines.cli._discover_components",
+                    return_value=["search-space"]), \
+             patch("autox_tools.s3.cli._paginate_objects",
+                    return_value={"Contents": comp_objects, "CommonPrefixes": []}):
+            mock_boto3.client.return_value = mock_s3
+            cli.cmd_artifacts(
+                kfp_client,
+                _artifacts_ns(component="search-space", download=str(tmp_path)),
+            )
+
+        out = capsys.readouterr().out
+        assert "Downloaded" in out
+        mock_s3.download_file.assert_called_once()
+
+    def test_component_with_pattern_exits(self):
+        kfp_client = self._setup_mocks()
+
+        with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             pytest.raises(SystemExit, match="--component cannot be combined"):
+            cli.cmd_artifacts(
+                kfp_client,
+                _artifacts_ns(component="search-space", pattern="P1"),
+            )
+
+    def test_component_json(self, capsys):
+        kfp_client = self._setup_mocks()
+        comp_objects = [
+            {"Key": "pipeline/run-1/search-space/id1/file1.json", "Size": 100},
+        ]
+
+        with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
+             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
+             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             patch("autox_tools.pipelines.cli._discover_components",
+                    return_value=["search-space"]), \
+             patch("autox_tools.s3.cli._paginate_objects",
+                    return_value={"Contents": comp_objects, "CommonPrefixes": []}):
+            cli.cmd_artifacts(kfp_client, _artifacts_ns(component="search-space", json=True))
+
+        import json
+        result = json.loads(capsys.readouterr().out)
+        assert result["component"] == "search-space"
+        assert result["total"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -699,6 +1377,29 @@ class TestParser:
         assert args.command == "artifacts"
         assert args.run_id == "run-42"
         assert args.download == "/tmp/out"
+        assert args.pattern is None
+        assert args.artifact is None
+
+    def test_artifacts_component_args(self):
+        parser = cli._build_parser()
+        args = parser.parse_args(["artifacts", "run-42", "--component", "search-space"])
+        assert args.component == "search-space"
+        assert args.pattern is None
+
+    def test_artifacts_pattern_args(self):
+        parser = cli._build_parser()
+        args = parser.parse_args(["artifacts", "run-42", "--pattern", "P1", "--artifact", "eval.json"])
+        assert args.pattern == "P1"
+        assert args.artifact == "eval.json"
+        assert args.print_content is False
+
+    def test_artifacts_print_flag(self):
+        parser = cli._build_parser()
+        args = parser.parse_args([
+            "artifacts", "run-42", "--pattern", "P1",
+            "--artifact", "eval.json", "--print",
+        ])
+        assert args.print_content is True
 
     def test_list_defaults(self):
         parser = cli._build_parser()
