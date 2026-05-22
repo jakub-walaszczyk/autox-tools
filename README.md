@@ -4,7 +4,7 @@ CLI tooling for operators and developers working with **AutoRAG** and **AutoML**
 
 AutoRAG optimizes Retrieval-Augmented Generation pipelines -- it benchmarks configurations across document parsing, query expansion, retrieval strategy, passage reranking, and end-to-end evaluation to find the best-performing RAG pattern. AutoML automates machine learning model selection and hyperparameter tuning for tabular and time-series data. Both run on Kubeflow Pipelines.
 
-This repository provides self-contained command-line utilities that interact with the infrastructure components these systems depend on: vector databases, object storage, and pipeline runners. Each tool is packaged under `autox_tools` and registered as a `uv`-runnable entry point for zero-friction use in development workflows.
+This repository provides self-contained command-line utilities that interact with the infrastructure components these systems depend on: vector databases, object storage, pipeline runners, and Kubernetes secrets. Each tool is packaged under `autox_tools` and registered as a `uv`-runnable entry point for zero-friction use in development workflows.
 
 ## Prerequisites
 
@@ -30,6 +30,7 @@ uv run milvus --help
 | `ogx` | [`autox_tools/ogx/`](autox_tools/ogx/README.md) | Inspect and test models, providers, and vector stores on an OGX gateway |
 | `pipelines` | [`autox_tools/pipelines/`](autox_tools/pipelines/README.md) | Monitor and inspect Kubeflow Pipeline runs -- status, live progress, pod logs, and S3 artifacts |
 | `s3` | [`autox_tools/s3/`](autox_tools/s3/README.md) | Browse, download, upload, and clean up S3/MinIO experiment artifacts |
+| `secrets` | [`autox_tools/secrets/`](autox_tools/secrets/README.md) | Manage Kubernetes Opaque secrets -- list, decode, create, and update key-value secrets |
 
 ## Configuration
 
@@ -42,6 +43,7 @@ Two independent S3 connections are supported:
 | `AWS_*` | Data storage (experiment assets, datasets) | `s3` tool |
 | `ARTIFACTS_AWS_*` | Pipeline artifacts (evaluation results, notebooks, leaderboard) | `pipelines artifacts` subcommand |
 | `OGX_CLIENT_*` | OGX gateway connection (base URL, API key) | `ogx` tool |
+| `RHOAI_*`, `K8S_*` | OpenShift cluster auth and K8S API access | `pipelines`, `secrets` tools |
 
 ## Development
 
@@ -77,6 +79,11 @@ autox-tools/
     ogx/               # OGX gateway CLI tool
       __init__.py
       _client.py       #   Connection factory (env vars -> OgxClient)
+      cli.py           #   argparse entry point and subcommands
+      README.md        #   Command reference and setup guide
+    secrets/           # Kubernetes secret management tool
+      __init__.py
+      _client.py       #   K8S client factory (env vars -> CoreV1Api)
       cli.py           #   argparse entry point and subcommands
       README.md        #   Command reference and setup guide
     pipelines/         # KFP pipeline management tool

@@ -19,6 +19,7 @@ pipelines = "autox_tools.pipelines.cli:main"
 s3 = "autox_tools.s3.cli:main"
 experiments = "autox_tools.experiments.cli:main"
 ogx = "autox_tools.ogx.cli:main"
+secrets = "autox_tools.secrets.cli:main"
 
 [dependency-groups]
 dev = [
