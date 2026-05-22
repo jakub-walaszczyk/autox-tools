@@ -3,7 +3,7 @@
 ## Project
 
 autox-tools: CLI tooling for Red Hat OpenShift AI's AutoRAG and AutoML features.
-Tools interact with vector databases, object storage, and Kubeflow pipeline infrastructure.
+Tools interact with vector databases, object storage, Kubeflow pipeline infrastructure, and OGX AI gateways.
 
 ## Quick orientation
 

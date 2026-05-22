@@ -27,6 +27,7 @@ uv run milvus --help
 | Entry point | Package | Description |
 |---|---|---|
 | `milvus` | [`autox_tools/milvus/`](autox_tools/milvus/README.md) | Manage remote Milvus vector database instances -- list, inspect, query, export, and maintain collections |
+| `ogx` | [`autox_tools/ogx/`](autox_tools/ogx/README.md) | Inspect and test models, providers, and vector stores on an OGX gateway |
 | `pipelines` | [`autox_tools/pipelines/`](autox_tools/pipelines/README.md) | Monitor and inspect Kubeflow Pipeline runs -- status, live progress, pod logs, and S3 artifacts |
 | `s3` | [`autox_tools/s3/`](autox_tools/s3/README.md) | Browse, download, upload, and clean up S3/MinIO experiment artifacts |
 
@@ -40,6 +41,7 @@ Two independent S3 connections are supported:
 |---|---|---|
 | `AWS_*` | Data storage (experiment assets, datasets) | `s3` tool |
 | `ARTIFACTS_AWS_*` | Pipeline artifacts (evaluation results, notebooks, leaderboard) | `pipelines artifacts` subcommand |
+| `OGX_CLIENT_*` | OGX gateway connection (base URL, API key) | `ogx` tool |
 
 ## Development
 
@@ -63,9 +65,18 @@ uv run pytest
 autox-tools/
   autox_tools/
     __init__.py
+    experiments/       # Experiment result analysis tool
+      __init__.py
+      cli.py           #   argparse entry point and subcommands
+      README.md        #   Command reference and setup guide
     milvus/            # Milvus CLI tool
       __init__.py
       _client.py       #   Connection factory (env vars -> MilvusClient)
+      cli.py           #   argparse entry point and subcommands
+      README.md        #   Command reference and setup guide
+    ogx/               # OGX gateway CLI tool
+      __init__.py
+      _client.py       #   Connection factory (env vars -> OgxClient)
       cli.py           #   argparse entry point and subcommands
       README.md        #   Command reference and setup guide
     pipelines/         # KFP pipeline management tool
