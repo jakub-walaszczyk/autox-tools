@@ -357,7 +357,7 @@ class TestCmdList:
         args = argparse.Namespace(limit=20, experiment="my-exp", state=None, json=False)
         cli.cmd_list(client, args)
 
-        client.list_runs.assert_called_once_with(page_size=20, experiment_id="exp-42")
+        client.list_runs.assert_called_once_with(page_size=20, sort_by="created_at desc", experiment_id="exp-42")
 
     def test_experiment_not_found(self):
         client = MagicMock()
@@ -794,6 +794,7 @@ class TestCmdArtifactsNoS3:
              patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
              patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
              patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             patch("autox_tools.pipelines.cli._refine_prefix_for_run", return_value="prefix/"), \
              pytest.raises(SystemExit, match="--artifact requires --pattern"):
             cli.cmd_artifacts(client, _artifacts_ns(artifact="eval.json"))
 
@@ -1109,6 +1110,7 @@ class TestCmdArtifactsPattern:
              patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
              patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
              patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             patch("autox_tools.pipelines.cli._refine_prefix_for_run", return_value="prefix/"), \
              patch("autox_tools.pipelines.cli._find_rag_patterns_prefix",
                     return_value="base/rag_patterns/"), \
              patch("autox_tools.pipelines.cli._discover_patterns",
@@ -1246,6 +1248,7 @@ class TestCmdArtifactsPattern:
              patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
              patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
              patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             patch("autox_tools.pipelines.cli._refine_prefix_for_run", return_value="prefix/"), \
              patch("autox_tools.pipelines.cli._find_rag_patterns_prefix",
                     return_value=None), \
              pytest.raises(SystemExit):
@@ -1315,6 +1318,7 @@ class TestCmdArtifactsComponent:
              patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
              patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
              patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             patch("autox_tools.pipelines.cli._refine_prefix_for_run", return_value="pipeline/run-1/"), \
              patch("autox_tools.pipelines.cli._discover_components",
                     return_value=["rag-templates-optimization", "search-space"]), \
              patch("autox_tools.s3.cli._paginate_objects",
@@ -1361,6 +1365,7 @@ class TestCmdArtifactsComponent:
              patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
              patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
              patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             patch("autox_tools.pipelines.cli._refine_prefix_for_run", return_value="prefix/"), \
              patch("autox_tools.pipelines.cli._discover_components",
                     return_value=["rag-templates-optimization", "search-space"]), \
              pytest.raises(SystemExit):
@@ -1402,6 +1407,7 @@ class TestCmdArtifactsComponent:
              patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
              patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
              patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             patch("autox_tools.pipelines.cli._refine_prefix_for_run", return_value="prefix/"), \
              pytest.raises(SystemExit, match="--component cannot be combined"):
             cli.cmd_artifacts(
                 kfp_client,
@@ -1460,10 +1466,9 @@ class TestParser:
 
     def test_logs_args(self):
         parser = cli._build_parser()
-        args = parser.parse_args(["logs", "run-42", "--task", "indexing", "--tail", "50", "--all"])
+        args = parser.parse_args(["logs", "run-42", "--tail", "50", "--all"])
         assert args.command == "logs"
         assert args.run_id == "run-42"
-        assert args.task == "indexing"
         assert args.tail == 50
         assert args.all is True
 
@@ -1513,7 +1518,6 @@ class TestParser:
     def test_logs_defaults(self):
         parser = cli._build_parser()
         args = parser.parse_args(["logs", "run-1"])
-        assert args.task is None
         assert args.tail == 100
         assert args.all is False
 

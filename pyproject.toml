@@ -9,12 +9,14 @@ dependencies = [
     "kubernetes>=28.0",
     "pymilvus>=2.4",
     "python-dotenv>=1.0",
+    "tabulate>=0.9",
 ]
 
 [project.scripts]
 milvus = "autox_tools.milvus.cli:main"
 pipelines = "autox_tools.pipelines.cli:main"
 s3 = "autox_tools.s3.cli:main"
+experiments = "autox_tools.experiments.cli:main"
 
 [dependency-groups]
 dev = [
@@ -70,6 +72,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "kubernetes.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tabulate.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

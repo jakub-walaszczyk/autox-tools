@@ -191,7 +191,7 @@ def cmd_list(kfp_client: Any, args: argparse.Namespace, **_: Any) -> None:
         except Exception:
             sys.exit(f"Experiment '{args.experiment}' not found.")
 
-    kwargs: dict[str, Any] = {"page_size": args.limit}
+    kwargs: dict[str, Any] = {"page_size": args.limit, "sort_by": "created_at desc"}
     if experiment_id:
         kwargs["experiment_id"] = experiment_id
 
