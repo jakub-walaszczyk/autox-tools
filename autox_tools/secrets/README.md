@@ -1,6 +1,6 @@
 # secrets
 
-Manage Kubernetes Opaque secrets on OpenShift AI clusters. List, decode, create, and update key-value secrets used by AutoRAG and AutoML workloads.
+Manage Kubernetes Opaque secrets on OpenShift AI clusters. List, decode, create, update, and delete key-value secrets used by AutoRAG and AutoML workloads.
 
 ## Setup
 
@@ -72,6 +72,17 @@ uv run secrets create db-creds \
 
 # Skip confirmation
 uv run secrets create db-creds --from-literal key=value -y
+```
+
+### delete
+
+Delete a secret from the namespace. Refuses to delete non-Opaque secrets.
+
+```bash
+uv run secrets delete db-creds
+uv run secrets delete db-creds -n other-namespace
+uv run secrets delete db-creds -y          # skip confirmation
+uv run secrets delete db-creds --json
 ```
 
 ### edit

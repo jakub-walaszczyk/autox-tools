@@ -6,6 +6,7 @@ Usage::
     uv run secrets reveal <name> [-n NAMESPACE] [--json]
     uv run secrets create <name> --from-literal KEY=VALUE [...] [--from-env-file FILE] [-y] [--json]
     uv run secrets edit <name> --set KEY=VALUE [...] --remove KEY [...] [-y] [--json]
+    uv run secrets delete <name> [-n NAMESPACE] [-y] [--json]
 """
 
 from __future__ import annotations
@@ -396,6 +397,37 @@ def cmd_edit(api: Any, args: argparse.Namespace, namespace: str) -> None:
     print(f"\nSecret '{args.name}' updated in '{namespace}' ({len(final_keys)} key(s)).")
 
 
+def cmd_delete(api: Any, args: argparse.Namespace, namespace: str) -> None:
+    """Delete a secret from the namespace."""
+    try:
+        secret = api.read_namespaced_secret(name=args.name, namespace=namespace, _request_timeout=30)
+    except Exception as exc:
+        exc_str = str(exc)
+        if "404" in exc_str or "Not Found" in exc_str:
+            sys.exit(f"Secret '{args.name}' not found in '{namespace}'.")
+        _exit_k8s_error(exc, namespace, "read")
+
+    if (secret.type or "") != "Opaque":
+        sys.exit(f"Secret '{args.name}' is of type '{secret.type}', not Opaque. Refusing to delete.")
+
+    key_count = len(secret.data) if secret.data else 0
+
+    if not args.yes and not _confirm(f"Delete secret '{args.name}' ({key_count} key(s)) from '{namespace}'?"):
+        print("Aborted.")
+        return
+
+    try:
+        api.delete_namespaced_secret(name=args.name, namespace=namespace, _request_timeout=30)
+    except Exception as exc:
+        _exit_k8s_error(exc, namespace, "delete")
+
+    if args.json:
+        _print_json({"name": args.name, "namespace": namespace, "deleted": True})
+        return
+
+    print(f"Secret '{args.name}' deleted from '{namespace}'.")
+
+
 # ---------------------------------------------------------------------------
 # CLI wiring
 # ---------------------------------------------------------------------------
@@ -428,6 +460,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--labels", help="Labels to apply (e.g. 'app=myapp,env=prod')")
     p.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt")
 
+    # delete
+    p = sub.add_parser("delete", help="Delete a secret")
+    p.add_argument("name", help="Secret name")
+    p.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt")
+
     # edit
     p = sub.add_parser("edit", help="Update an existing secret")
     p.add_argument("name", help="Secret name")
@@ -451,6 +488,7 @@ def main() -> None:
         "list": cmd_list,
         "reveal": cmd_reveal,
         "create": cmd_create,
+        "delete": cmd_delete,
         "edit": cmd_edit,
     }
     commands[args.command](api, args, namespace)

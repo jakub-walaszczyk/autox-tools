@@ -477,6 +477,66 @@ class TestCmdCreate:
 
 
 # ---------------------------------------------------------------------------
+# delete command
+# ---------------------------------------------------------------------------
+
+
+class TestCmdDelete:
+    def test_deletes_secret(self, capsys: pytest.CaptureFixture[str]) -> None:
+        api = _mock_api()
+        api.read_namespaced_secret.return_value = _make_secret("target", data={"k": "v"})
+        cli.cmd_delete(api, _ns_args(command="delete", name="target"), "test-ns")
+        out = capsys.readouterr().out
+        assert "deleted" in out
+        api.delete_namespaced_secret.assert_called_once_with(name="target", namespace="test-ns", _request_timeout=30)
+
+    def test_not_found_exits(self) -> None:
+        api = _mock_api()
+        api.read_namespaced_secret.side_effect = Exception("404 Not Found")
+        with pytest.raises(SystemExit, match="not found"):
+            cli.cmd_delete(api, _ns_args(command="delete", name="missing"), "test-ns")
+
+    def test_non_opaque_exits(self) -> None:
+        api = _mock_api()
+        api.read_namespaced_secret.return_value = _make_secret(
+            "tls", secret_type="kubernetes.io/tls", data={"tls.crt": "x"},
+        )
+        with pytest.raises(SystemExit, match="not Opaque"):
+            cli.cmd_delete(api, _ns_args(command="delete", name="tls"), "test-ns")
+
+    def test_confirmation_abort(self, capsys: pytest.CaptureFixture[str]) -> None:
+        api = _mock_api()
+        api.read_namespaced_secret.return_value = _make_secret("target", data={"k": "v"})
+        with patch("builtins.input", return_value="n"):
+            cli.cmd_delete(api, _ns_args(command="delete", name="target", yes=False), "test-ns")
+        out = capsys.readouterr().out
+        assert "Aborted" in out
+        api.delete_namespaced_secret.assert_not_called()
+
+    def test_yes_skips_prompt(self) -> None:
+        api = _mock_api()
+        api.read_namespaced_secret.return_value = _make_secret("target", data={"k": "v"})
+        cli.cmd_delete(api, _ns_args(command="delete", name="target", yes=True), "test-ns")
+        api.delete_namespaced_secret.assert_called_once()
+
+    def test_json_output(self, capsys: pytest.CaptureFixture[str]) -> None:
+        api = _mock_api()
+        api.read_namespaced_secret.return_value = _make_secret("target", data={"k": "v"})
+        cli.cmd_delete(api, _ns_args(command="delete", name="target", json=True), "test-ns")
+        result = json.loads(capsys.readouterr().out)
+        assert result["name"] == "target"
+        assert result["namespace"] == "test-ns"
+        assert result["deleted"] is True
+
+    def test_k8s_error_403(self) -> None:
+        api = _mock_api()
+        api.read_namespaced_secret.return_value = _make_secret("target", data={"k": "v"})
+        api.delete_namespaced_secret.side_effect = Exception("403 Forbidden")
+        with pytest.raises(SystemExit, match="403 Forbidden"):
+            cli.cmd_delete(api, _ns_args(command="delete", name="target"), "test-ns")
+
+
+# ---------------------------------------------------------------------------
 # edit command
 # ---------------------------------------------------------------------------
 
@@ -653,6 +713,16 @@ class TestParser:
 
     def test_yes_flag_edit(self) -> None:
         args = self._parse("edit", "target", "--set", "k=v", "-y")
+        assert args.yes is True
+
+    def test_delete_args(self) -> None:
+        args = self._parse("delete", "my-secret")
+        assert args.command == "delete"
+        assert args.name == "my-secret"
+        assert args.yes is False
+
+    def test_delete_yes_flag(self) -> None:
+        args = self._parse("delete", "my-secret", "-y")
         assert args.yes is True
 
 

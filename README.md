@@ -30,7 +30,7 @@ uv run milvus --help
 | `ogx` | [`autox_tools/ogx/`](autox_tools/ogx/README.md) | Inspect and test models, providers, and vector stores on an OGX gateway |
 | `pipelines` | [`autox_tools/pipelines/`](autox_tools/pipelines/README.md) | Monitor and inspect Kubeflow Pipeline runs -- status, live progress, pod logs, and S3 artifacts |
 | `s3` | [`autox_tools/s3/`](autox_tools/s3/README.md) | Browse, download, upload, and clean up S3/MinIO experiment artifacts |
-| `secrets` | [`autox_tools/secrets/`](autox_tools/secrets/README.md) | Manage Kubernetes Opaque secrets -- list, decode, create, and update key-value secrets |
+| `secrets` | [`autox_tools/secrets/`](autox_tools/secrets/README.md) | Manage Kubernetes Opaque secrets -- list, decode, create, update, and delete key-value secrets |
 
 ## Configuration
 
