@@ -92,12 +92,32 @@ def list_and_categorize(
     return artifacts
 
 
-def extract_metrics(data: dict) -> dict[str, float]:
-    """Extract numeric metrics from an evaluation results dict.
+def extract_metrics(data: dict | list) -> dict[str, float]:
+    """Extract numeric metrics from evaluation results.
 
-    Handles both flat structures (``{"accuracy": 0.9, ...}``) and nested
-    ones (``{"metrics": {"accuracy": 0.9, ...}, ...}``).
+    Handles flat dicts (``{"accuracy": 0.9, ...}``), nested dicts
+    (``{"metrics": {"accuracy": 0.9, ...}}``), and lists of per-pattern
+    result dicts (averages numeric fields across entries).
     """
+    if isinstance(data, list):
+        dicts = [e for e in data if isinstance(e, dict)]
+        if not dicts:
+            return {}
+        numeric_keys: set[str] = set()
+        for entry in dicts:
+            numeric_keys.update(
+                k for k, v in entry.items() if isinstance(v, (int, float))
+            )
+        aggregated: dict[str, float] = {}
+        for key in numeric_keys:
+            values = [
+                e[key] for e in dicts
+                if key in e and isinstance(e[key], (int, float))
+            ]
+            if values:
+                aggregated[key] = sum(values) / len(values)
+        return aggregated
+
     source = data
     if "metrics" in data and isinstance(data["metrics"], dict):
         source = data["metrics"]

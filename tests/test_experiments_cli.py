@@ -70,6 +70,22 @@ class TestExtractMetrics:
         result = _artifacts.extract_metrics(data)
         assert result == {"accuracy": 0.9, "count": 42}
 
+    def test_list_of_dicts(self):
+        data = [
+            {"accuracy": 0.8, "f1_score": 0.7, "name": "p1"},
+            {"accuracy": 0.9, "f1_score": 0.8, "name": "p2"},
+        ]
+        result = _artifacts.extract_metrics(data)
+        assert result["accuracy"] == pytest.approx(0.85)
+        assert result["f1_score"] == pytest.approx(0.75)
+        assert "name" not in result
+
+    def test_empty_list(self):
+        assert _artifacts.extract_metrics([]) == {}
+
+    def test_list_of_non_dicts(self):
+        assert _artifacts.extract_metrics(["a", "b"]) == {}
+
     def test_empty_dict(self):
         assert _artifacts.extract_metrics({}) == {}
 
@@ -524,8 +540,76 @@ class TestCmdResults:
         s3.get_object.side_effect = Exception("NoSuchKey")
 
         with _mock_resolve(), \
+             patch("autox_tools.experiments.cli._paginate_objects",
+                   return_value={"Contents": []}), \
              pytest.raises(SystemExit, match=r"No evaluation_results\.json"):
             cli.cmd_results(kfp, s3, _results_ns())
+
+    def test_recursive_fallback_finds_nested_results(self, capsys):
+        """When shallow subpath checks miss, the recursive scan should find
+        result files nested deep under the prefix (e.g. inside
+        rag-templates-optimization/<id>/rag_patterns/)."""
+        kfp = MagicMock()
+        s3 = MagicMock()
+        data = _eval_results_json()
+        nested_key = (
+            "pipeline/run-1/rag-templates-optimization/"
+            "run-1/rag_patterns/p1/evaluation_results.json"
+        )
+
+        def mock_get(**kwargs):
+            if kwargs["Key"] == nested_key:
+                return _s3_get_object(data)
+            raise Exception("NoSuchKey")
+
+        s3.get_object.side_effect = mock_get
+
+        listing = {"Contents": [
+            {"Key": nested_key, "Size": 1024},
+            {"Key": "pipeline/run-1/rag-templates-optimization/run-1/other.txt", "Size": 100},
+        ]}
+
+        with _mock_resolve(), \
+             patch("autox_tools.experiments.cli._paginate_objects",
+                   return_value=listing):
+            cli.cmd_results(kfp, s3, _results_ns())
+
+        out = capsys.readouterr().out
+        assert "answer_correctness" in out
+        assert nested_key in out
+
+    def test_recursive_fallback_prefers_eval_over_metrics(self, capsys):
+        """Recursive scan should prefer evaluation_results.json over metrics.json."""
+        kfp = MagicMock()
+        s3 = MagicMock()
+        eval_data = _eval_results_json()
+        metrics_data = {"accuracy": 0.5}
+
+        eval_key = "pipeline/run-1/deep/evaluation_results.json"
+        metrics_key = "pipeline/run-1/deep/metrics.json"
+
+        def mock_get(**kwargs):
+            if kwargs["Key"] == eval_key:
+                return _s3_get_object(eval_data)
+            if kwargs["Key"] == metrics_key:
+                return _s3_get_object(metrics_data)
+            raise Exception("NoSuchKey")
+
+        s3.get_object.side_effect = mock_get
+
+        listing = {"Contents": [
+            {"Key": metrics_key, "Size": 50},
+            {"Key": eval_key, "Size": 1024},
+        ]}
+
+        with _mock_resolve(), \
+             patch("autox_tools.experiments.cli._paginate_objects",
+                   return_value=listing):
+            cli.cmd_results(kfp, s3, _results_ns())
+
+        out = capsys.readouterr().out
+        assert "0.8470" in out
+        assert eval_key in out
 
     def test_tries_multiple_subpaths(self):
         kfp = MagicMock()

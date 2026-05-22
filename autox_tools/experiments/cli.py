@@ -29,6 +29,7 @@ from autox_tools.experiments._display import (
     is_lower_better,
 )
 from autox_tools.experiments._resolver import resolve
+from autox_tools.s3.cli import _paginate_objects
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -50,23 +51,55 @@ def _print_json(data: object) -> None:
     print(json.dumps(data, indent=2, default=str))
 
 
-def _download_json(s3_client: Any, bucket: str, key: str) -> dict | None:
+def _download_json(s3_client: Any, bucket: str, key: str) -> dict | list | None:
     """Download and parse a JSON file from S3.  Returns None on failure."""
     try:
         response = s3_client.get_object(Bucket=bucket, Key=key)
-        result: dict = json.loads(response["Body"].read())
-        return result
+        return json.loads(response["Body"].read())
     except Exception:
         return None
 
 
+def _find_results_recursive(
+    s3_client: Any, bucket: str, prefix: str,
+) -> tuple[dict | list | None, str | None]:
+    """Scan the full prefix tree for result files.
+
+    Falls back to a recursive S3 listing when the result files are nested
+    deeper than the well-known subpaths (e.g. inside
+    ``rag-templates-optimization/<id>/rag_patterns/``).  Prefers
+    ``evaluation_results.json`` over ``metrics.json``.
+    """
+    result = _paginate_objects(s3_client, bucket, prefix)
+    eval_key: str | None = None
+    metrics_key: str | None = None
+    for obj in result.get("Contents", []):
+        key: str = obj["Key"]
+        basename = key.rsplit("/", 1)[-1]
+        if basename == "evaluation_results.json" and eval_key is None:
+            eval_key = key
+        elif basename == "metrics.json" and metrics_key is None:
+            metrics_key = key
+        if eval_key:
+            break
+
+    chosen = eval_key or metrics_key
+    if chosen:
+        data = _download_json(s3_client, bucket, chosen)
+        if data is not None:
+            return data, chosen
+    return None, None
+
+
 def _find_results(
     s3_client: Any, bucket: str, prefix: str,
-) -> tuple[dict | None, str | None]:
+) -> tuple[dict | list | None, str | None]:
     """Locate and download the evaluation results file.
 
     Tries ``evaluation_results.json`` first (AutoRAG), then
-    ``metrics.json`` (AutoML), at multiple sub-paths under *prefix*.
+    ``metrics.json`` (AutoML), at well-known sub-paths under *prefix*.
+    When none of the shallow paths match, falls back to a recursive
+    listing of the entire prefix tree.
     Returns ``(parsed_json, s3_key)`` or ``(None, None)``.
     """
     prefix = prefix.rstrip("/") + "/" if prefix and not prefix.endswith("/") else prefix
@@ -75,7 +108,7 @@ def _find_results(
         data = _download_json(s3_client, bucket, key)
         if data is not None:
             return data, key
-    return None, None
+    return _find_results_recursive(s3_client, bucket, prefix)
 
 
 # ---------------------------------------------------------------------------
@@ -113,13 +146,16 @@ def cmd_results(kfp_client: Any, s3_client: Any, args: argparse.Namespace) -> No
             formatted = f"{value:.4f}" if isinstance(value, float) else str(value)
             print(f"  {name:<{max_name}}  {formatted}")
 
-    patterns_evaluated = data.get("patterns_evaluated")
-    best_pattern = data.get("best_pattern")
-    if patterns_evaluated is not None:
-        print(f"\nPatterns evaluated: {patterns_evaluated}")
-    if best_pattern:
-        bp_name = best_pattern.get("name", best_pattern) if isinstance(best_pattern, dict) else best_pattern
-        print(f"Best pattern: {bp_name}")
+    if isinstance(data, list):
+        print(f"\nPatterns evaluated: {len(data)}")
+    else:
+        patterns_evaluated = data.get("patterns_evaluated")
+        best_pattern = data.get("best_pattern")
+        if patterns_evaluated is not None:
+            print(f"\nPatterns evaluated: {patterns_evaluated}")
+        if best_pattern:
+            bp_name = best_pattern.get("name", best_pattern) if isinstance(best_pattern, dict) else best_pattern
+            print(f"Best pattern: {bp_name}")
 
 
 def cmd_compare(kfp_client: Any, s3_client: Any, args: argparse.Namespace) -> None:
