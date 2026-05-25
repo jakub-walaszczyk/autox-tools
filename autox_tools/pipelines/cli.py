@@ -263,6 +263,43 @@ def cmd_list(kfp_client: Any, args: argparse.Namespace, **_: Any) -> None:
     print(f"\n  {len(entries)} run(s)")
 
 
+def _print_run_summary(
+    run_id: str,
+    state: str,
+    elapsed: float,
+    tasks: list[dict[str, Any]],
+    run_obj: Any,
+) -> None:
+    """Print a structured completion summary for a finished pipeline run."""
+    succeeded = state.lower() == "succeeded"
+    icon = "[OK]" if succeeded else "[FAIL]"
+    border = "=" * 60
+
+    print(f"\n{border}")
+    print(f"  {icon}  Pipeline run finished — {state.upper()}")
+    print(border)
+    print(f"  Run ID   : {run_id}")
+    print(f"  Duration : {_format_duration(elapsed)}")
+
+    if tasks:
+        print(f"  Tasks    : {len(tasks)}")
+        print()
+        for t in tasks:
+            task_icon = "+" if t["state"].lower() == "succeeded" else "-"
+            print(f"    [{task_icon}] {t['name']:<30} {t['state']}")
+            if t.get("error"):
+                err = t["error"]
+                if len(err) > _MAX_ERROR_LEN:
+                    err = err[:_MAX_ERROR_LEN] + "..."
+                print(f"        Error: {err}")
+
+    error = getattr(run_obj, "error", None)
+    if error:
+        print(f"\n  Run error: {error}")
+
+    print(border)
+
+
 def cmd_watch(kfp_client: Any, args: argparse.Namespace, **_: Any) -> None:
     """Live progress monitoring for a pipeline run."""
     run_id = args.run_id
@@ -271,6 +308,7 @@ def cmd_watch(kfp_client: Any, args: argparse.Namespace, **_: Any) -> None:
     is_tty = sys.stdout.isatty()
 
     start = time.monotonic()
+    prev_line_count = 0
 
     while True:
         elapsed = time.monotonic() - start
@@ -286,9 +324,8 @@ def cmd_watch(kfp_client: Any, args: argparse.Namespace, **_: Any) -> None:
         run_details = getattr(run, "run_details", None) or run_obj
         tasks = _extract_tasks(run_details, pipeline_name)
 
-        if is_tty:
-            line_count = 1 + len(tasks)
-            sys.stdout.write(f"\033[{line_count}A\033[J" if elapsed > 0 else "")
+        if is_tty and prev_line_count > 0:
+            sys.stdout.write(f"\033[{prev_line_count}A\033[J")
 
         sys.stdout.write(
             f"[pipelines] run={run_id[:12]}... state={state} "
@@ -301,11 +338,10 @@ def cmd_watch(kfp_client: Any, args: argparse.Namespace, **_: Any) -> None:
                 sys.stdout.write(f"  {t['name']} {dots} {t['state']}\n")
 
         sys.stdout.flush()
+        prev_line_count = 1 + len(tasks)
 
         if _is_terminal(state):
-            error = getattr(run_obj, "error", None)
-            if error:
-                print(f"\nError: {error}")
+            _print_run_summary(run_id, state, elapsed, tasks, run_obj)
             exit_code = 0 if state.lower() == "succeeded" else 1
             sys.exit(exit_code)
 
