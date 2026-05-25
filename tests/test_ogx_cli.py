@@ -92,11 +92,42 @@ def _make_embedding_response(dimensions: int = 1536) -> SimpleNamespace:
     )
 
 
+def _make_anthropic_model(
+    model_id: str = "claude-3-sonnet",
+    display_name: str = "Claude 3 Sonnet",
+    max_input_tokens: int = 200_000,
+    max_tokens: int = 4_096,
+    created_at: str = "2024-02-29T00:00:00Z",
+) -> SimpleNamespace:
+    """Build a fake AnthropicModelInfo object."""
+    return SimpleNamespace(
+        id=model_id,
+        display_name=display_name,
+        created_at=created_at,
+        max_input_tokens=max_input_tokens,
+        max_tokens=max_tokens,
+    )
+
+
+def _make_google_model(
+    name: str = "models/gemini-pro",
+    display_name: str = "Gemini Pro",
+    description: str = "A large language model by Google",
+) -> SimpleNamespace:
+    """Build a fake GoogleModelInfo object."""
+    return SimpleNamespace(
+        name=name,
+        display_name=display_name,
+        description=description,
+    )
+
+
 def _args(**kwargs: object) -> argparse.Namespace:
     """Build an argparse.Namespace with defaults for the ogx CLI."""
     defaults: dict[str, object] = {
         "json": False,
         "command": "health",
+        "metadata": False,
     }
     defaults.update(kwargs)
     return argparse.Namespace(**defaults)
@@ -167,6 +198,20 @@ class TestHelpers:
 
     def test_format_ts_none(self):
         assert cli._format_ts(None) == "—"
+
+    def test_compact_metadata_empty(self):
+        assert cli._compact_metadata(None) == "—"
+        assert cli._compact_metadata({}) == "—"
+
+    def test_compact_metadata_sorted(self):
+        result = cli._compact_metadata({"z_key": 1, "a_key": 2})
+        assert result == "a_key=2, z_key=1"
+
+    def test_compact_metadata_truncation(self):
+        meta = {f"key_{i}": f"value_{i}" for i in range(20)}
+        result = cli._compact_metadata(meta, max_width=30)
+        assert len(result) <= 30
+        assert result.endswith("…")
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +285,135 @@ class TestCmdModels:
         assert data["total"] == 1
         assert data["models"][0]["id"] == "gpt-4o"
         assert data["models"][0]["model_type"] == "llm"
+
+    def test_metadata_column_shown(self, capsys: pytest.CaptureFixture[str]):
+        m = _make_model("bge-large", "embedding", "local-hf")
+        m.metadata = {"embedding_dimension": 768, "context_length": 512}
+        client = MagicMock()
+        client.models.list.return_value = SimpleNamespace(data=[m])
+
+        cli.cmd_models(client, _args(command="models", type="all", metadata=True))
+
+        out = capsys.readouterr().out
+        assert "Metadata" in out
+        assert "context_length=512" in out
+        assert "embedding_dimension=768" in out
+
+    def test_metadata_column_hidden_by_default(self, capsys: pytest.CaptureFixture[str]):
+        m = _make_model("bge-large", "embedding", "local-hf")
+        m.metadata = {"embedding_dimension": 768}
+        client = MagicMock()
+        client.models.list.return_value = SimpleNamespace(data=[m])
+
+        cli.cmd_models(client, _args(command="models", type="all"))
+
+        out = capsys.readouterr().out
+        assert "bge-large" in out
+        assert "embedding_dimension" not in out
+
+    def test_metadata_empty_shows_dash(self, capsys: pytest.CaptureFixture[str]):
+        client = MagicMock()
+        client.models.list.return_value = SimpleNamespace(data=[_make_model()])
+
+        cli.cmd_models(client, _args(command="models", type="all", metadata=True))
+
+        out = capsys.readouterr().out
+        assert "Metadata" in out
+
+
+# ---------------------------------------------------------------------------
+# cmd_info tests
+# ---------------------------------------------------------------------------
+
+class TestCmdInfo:
+    def test_info_ogx_model(self, capsys: pytest.CaptureFixture[str]):
+        model = _make_model("granite-embed-278m", "embedding", "vllm-embeddings")
+        model.provider_resource_id = "granite-embed-resource"
+        model.metadata = {"context_length": 8192, "embedding_dimension": 768}
+        client = MagicMock()
+        client.models.retrieve.return_value = model
+
+        cli.cmd_info(client, _args(command="info", model_id="granite-embed-278m"))
+
+        out = capsys.readouterr().out
+        assert "granite-embed-278m" in out
+        assert "embedding" in out
+        assert "vllm-embeddings" in out
+        assert "context_length" in out
+        assert "8192" in out
+        assert "embedding_dimension" in out
+        assert "768" in out
+
+    def test_info_anthropic_model(self, capsys: pytest.CaptureFixture[str]):
+        model = _make_anthropic_model()
+        client = MagicMock()
+        client.models.retrieve.return_value = model
+
+        cli.cmd_info(client, _args(command="info", model_id="claude-3-sonnet"))
+
+        out = capsys.readouterr().out
+        assert "claude-3-sonnet" in out
+        assert "Claude 3 Sonnet" in out
+        assert "200,000" in out
+        assert "4,096" in out
+        assert "2024-02-29" in out
+
+    def test_info_google_model(self, capsys: pytest.CaptureFixture[str]):
+        model = _make_google_model()
+        client = MagicMock()
+        client.models.retrieve.return_value = model
+
+        cli.cmd_info(client, _args(command="info", model_id="models/gemini-pro"))
+
+        out = capsys.readouterr().out
+        assert "gemini-pro" in out
+        assert "Gemini Pro" in out
+        assert "A large language model by Google" in out
+
+    def test_info_model_not_found(self):
+        client = MagicMock()
+        client.models.retrieve.side_effect = RuntimeError("404 Not Found")
+
+        with pytest.raises(SystemExit, match="not found"):
+            cli.cmd_info(client, _args(command="info", model_id="nonexistent"))
+
+    def test_info_json_output(self, capsys: pytest.CaptureFixture[str]):
+        model = _make_model("gpt-4o", "llm", "openai")
+        model.metadata = {"context_length": 128_000}
+        client = MagicMock()
+        client.models.retrieve.return_value = model
+
+        cli.cmd_info(client, _args(command="info", model_id="gpt-4o", json=True))
+
+        data = json.loads(capsys.readouterr().out)
+        assert data["id"] == "gpt-4o"
+        assert data["model_type"] == "llm"
+        assert data["provider_id"] == "openai"
+        assert data["metadata"]["context_length"] == 128_000
+
+    def test_info_json_anthropic(self, capsys: pytest.CaptureFixture[str]):
+        model = _make_anthropic_model(max_input_tokens=200_000, max_tokens=4_096)
+        client = MagicMock()
+        client.models.retrieve.return_value = model
+
+        cli.cmd_info(client, _args(command="info", model_id="claude-3-sonnet", json=True))
+
+        data = json.loads(capsys.readouterr().out)
+        assert data["max_input_tokens"] == 200_000
+        assert data["max_tokens"] == 4_096
+        assert data["display_name"] == "Claude 3 Sonnet"
+
+    def test_info_no_metadata(self, capsys: pytest.CaptureFixture[str]):
+        model = _make_model("gpt-4o", "llm", "openai")
+        model.metadata = None
+        client = MagicMock()
+        client.models.retrieve.return_value = model
+
+        cli.cmd_info(client, _args(command="info", model_id="gpt-4o"))
+
+        out = capsys.readouterr().out
+        assert "gpt-4o" in out
+        assert "Metadata" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -557,6 +731,23 @@ class TestParser:
     def test_check_default_prompt(self):
         args = cli._build_parser().parse_args(["check", "my-model"])
         assert "2+2" in args.prompt
+
+    def test_models_metadata_flag(self):
+        args = cli._build_parser().parse_args(["models", "--metadata"])
+        assert args.metadata is True
+
+    def test_models_metadata_short_flag(self):
+        args = cli._build_parser().parse_args(["models", "-m"])
+        assert args.metadata is True
+
+    def test_models_metadata_default(self):
+        args = cli._build_parser().parse_args(["models"])
+        assert args.metadata is False
+
+    def test_info_args(self):
+        args = cli._build_parser().parse_args(["info", "my-model"])
+        assert args.command == "info"
+        assert args.model_id == "my-model"
 
     def test_json_flag(self):
         args = cli._build_parser().parse_args(["--json", "models"])

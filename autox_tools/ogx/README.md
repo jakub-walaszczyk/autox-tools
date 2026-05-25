@@ -26,8 +26,20 @@ uv run ogx models                     # all models
 uv run ogx models --type llm          # LLMs only
 uv run ogx models --type embedding    # embedding models only
 uv run ogx models --type rerank       # rerank models only
-uv run ogx --json models              # JSON output
+uv run ogx models --metadata          # include metadata column (context_length, etc.)
+uv run ogx --json models              # JSON output (always includes metadata)
 ```
+
+### `info` -- Show detailed model information
+
+```bash
+uv run ogx info <model-id>            # full detail view with metadata
+uv run ogx --json info <model-id>     # JSON output
+```
+
+Retrieves a single model and displays all available fields including
+registration metadata (context length, embedding dimension, etc.) and
+provider-specific fields (max input/output tokens, display name, description).
 
 ### `providers` -- List vector store providers
 

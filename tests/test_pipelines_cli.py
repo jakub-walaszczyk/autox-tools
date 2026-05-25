@@ -6,6 +6,7 @@ All tests mock KFP and Kubernetes clients -- no cluster access required.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -1526,3 +1527,334 @@ class TestParser:
         args = parser.parse_args(["--json", "status", "run-1"])
         assert args.json is True
         assert args.command == "status"
+
+    def test_run_args(self):
+        parser = cli._build_parser()
+        args = parser.parse_args(["run", "config.json", "--watch", "--dry-run", "--run-name", "my-run"])
+        assert args.command == "run"
+        assert args.config == "config.json"
+        assert args.watch is True
+        assert args.dry_run is True
+        assert args.run_name == "my-run"
+
+    def test_run_override_args(self):
+        parser = cli._build_parser()
+        args = parser.parse_args(["run", "c.json", "--override", "k1=v1", "--override", "k2=v2"])
+        assert args.override == ["k1=v1", "k2=v2"]
+
+    def test_run_defaults(self):
+        parser = cli._build_parser()
+        args = parser.parse_args(["run", "c.json"])
+        assert args.watch is False
+        assert args.dry_run is False
+        assert args.override is None
+        assert args.run_name is None
+
+
+# ---------------------------------------------------------------------------
+# _load_run_config
+# ---------------------------------------------------------------------------
+
+class TestLoadRunConfig:
+    def test_loads_valid_config(self, tmp_path):
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text("apiVersion: v1")
+        config = tmp_path / "config.json"
+        config.write_text(json.dumps({
+            "pipeline_package": "pipeline.yaml",
+            "experiment": "test-exp",
+            "parameters": {"key": "value"},
+        }))
+
+        result = cli._load_run_config(str(config))
+        assert result["pipeline_package"] == str(pipeline)
+        assert result["experiment"] == "test-exp"
+        assert result["parameters"] == {"key": "value"}
+
+    def test_resolves_relative_pipeline_path(self, tmp_path):
+        sub = tmp_path / "subdir"
+        sub.mkdir()
+        pipeline = sub / "my-pipeline.yaml"
+        pipeline.write_text("apiVersion: v1")
+        config = sub / "config.json"
+        config.write_text(json.dumps({"pipeline_package": "my-pipeline.yaml"}))
+
+        result = cli._load_run_config(str(config))
+        assert result["pipeline_package"] == str(pipeline)
+
+    def test_absolute_pipeline_path(self, tmp_path):
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text("apiVersion: v1")
+        config = tmp_path / "config.json"
+        config.write_text(json.dumps({"pipeline_package": str(pipeline)}))
+
+        result = cli._load_run_config(str(config))
+        assert result["pipeline_package"] == str(pipeline)
+
+    def test_missing_config_file_exits(self):
+        with pytest.raises(SystemExit, match="Config file not found"):
+            cli._load_run_config("/nonexistent/config.json")
+
+    def test_invalid_json_exits(self, tmp_path):
+        config = tmp_path / "bad.json"
+        config.write_text("{not valid json")
+        with pytest.raises(SystemExit, match="Invalid JSON"):
+            cli._load_run_config(str(config))
+
+    def test_non_object_json_exits(self, tmp_path):
+        config = tmp_path / "array.json"
+        config.write_text("[1, 2, 3]")
+        with pytest.raises(SystemExit, match="must be a JSON object"):
+            cli._load_run_config(str(config))
+
+    def test_missing_required_key_exits(self, tmp_path):
+        config = tmp_path / "config.json"
+        config.write_text(json.dumps({"experiment": "test"}))
+        with pytest.raises(SystemExit, match="pipeline_package"):
+            cli._load_run_config(str(config))
+
+    def test_pipeline_file_not_found_exits(self, tmp_path):
+        config = tmp_path / "config.json"
+        config.write_text(json.dumps({"pipeline_package": "nonexistent.yaml"}))
+        with pytest.raises(SystemExit, match="Pipeline package not found"):
+            cli._load_run_config(str(config))
+
+    def test_invalid_parameters_type_exits(self, tmp_path):
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text("apiVersion: v1")
+        config = tmp_path / "config.json"
+        config.write_text(json.dumps({
+            "pipeline_package": "pipeline.yaml",
+            "parameters": "not-a-dict",
+        }))
+        with pytest.raises(SystemExit, match="must be an object"):
+            cli._load_run_config(str(config))
+
+
+# ---------------------------------------------------------------------------
+# _apply_overrides
+# ---------------------------------------------------------------------------
+
+class TestApplyOverrides:
+    def test_override_adds_parameter(self):
+        config: dict[str, Any] = {"parameters": {"a": "1"}}
+        cli._apply_overrides(config, ["b=2"], None)
+        assert config["parameters"] == {"a": "1", "b": "2"}
+
+    def test_override_replaces_parameter(self):
+        config: dict[str, Any] = {"parameters": {"model": "old"}}
+        cli._apply_overrides(config, ["model=new"], None)
+        assert config["parameters"]["model"] == "new"
+
+    def test_override_creates_parameters_dict(self):
+        config: dict[str, Any] = {}
+        cli._apply_overrides(config, ["k=v"], None)
+        assert config["parameters"] == {"k": "v"}
+
+    def test_run_name_override(self):
+        config: dict[str, Any] = {"run_name": "original"}
+        cli._apply_overrides(config, None, "overridden")
+        assert config["run_name"] == "overridden"
+
+    def test_invalid_override_format_exits(self):
+        config: dict[str, Any] = {}
+        with pytest.raises(SystemExit, match="Invalid --override format"):
+            cli._apply_overrides(config, ["no-equals-sign"], None)
+
+    def test_override_preserves_value_with_equals(self):
+        config: dict[str, Any] = {"parameters": {}}
+        cli._apply_overrides(config, ["path=s3://bucket/key=value"], None)
+        assert config["parameters"]["path"] == "s3://bucket/key=value"
+
+    def test_no_overrides_noop(self):
+        config: dict[str, Any] = {"parameters": {"k": "v"}}
+        cli._apply_overrides(config, None, None)
+        assert config == {"parameters": {"k": "v"}}
+
+
+# ---------------------------------------------------------------------------
+# cmd_run
+# ---------------------------------------------------------------------------
+
+class TestCmdRun:
+    def _make_config(self, tmp_path, extra=None):
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text("apiVersion: v1")
+        cfg = {
+            "pipeline_package": str(pipeline),
+            "experiment": "test-exp",
+            "run_name": "test-run",
+            "parameters": {"model": "granite-3b"},
+        }
+        if extra:
+            cfg.update(extra)
+        config_path = tmp_path / "config.json"
+        config_path.write_text(json.dumps(cfg))
+        return str(config_path)
+
+    def test_dry_run_human_output(self, tmp_path, capsys):
+        config_path = self._make_config(tmp_path)
+        args = argparse.Namespace(
+            config=config_path, watch=False, dry_run=True,
+            override=None, run_name=None, json=False,
+        )
+        with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
+            cli.cmd_run(None, args)
+
+        out = capsys.readouterr().out
+        assert "Dry run" in out
+        assert "Pipeline" in out
+        assert "test-exp" in out
+        assert "granite-3b" in out
+
+    def test_dry_run_json_output(self, tmp_path, capsys):
+        config_path = self._make_config(tmp_path)
+        args = argparse.Namespace(
+            config=config_path, watch=False, dry_run=True,
+            override=None, run_name=None, json=True,
+        )
+        with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
+            cli.cmd_run(None, args)
+
+        import json
+        result = json.loads(capsys.readouterr().out)
+        assert result["experiment"] == "test-exp"
+        assert result["parameters"]["model"] == "granite-3b"
+        assert result["run_name"] == "test-run"
+
+    def test_dry_run_with_overrides(self, tmp_path, capsys):
+        config_path = self._make_config(tmp_path)
+        args = argparse.Namespace(
+            config=config_path, watch=False, dry_run=True,
+            override=["model=llama-70b", "new_param=42"], run_name="override-name",
+            json=True,
+        )
+        with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
+            cli.cmd_run(None, args)
+
+        import json
+        result = json.loads(capsys.readouterr().out)
+        assert result["parameters"]["model"] == "llama-70b"
+        assert result["parameters"]["new_param"] == "42"
+        assert result["run_name"] == "override-name"
+
+    def test_submit_calls_kfp(self, tmp_path, capsys):
+        config_path = self._make_config(tmp_path)
+        run_response = SimpleNamespace(run_id="new-run-id-123")
+        kfp_client = MagicMock()
+        kfp_client.create_run_from_pipeline_package.return_value = run_response
+
+        args = argparse.Namespace(
+            config=config_path, watch=False, dry_run=False,
+            override=None, run_name=None, json=False,
+        )
+        with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
+            cli.cmd_run(kfp_client, args)
+
+        kfp_client.create_run_from_pipeline_package.assert_called_once()
+        call_kwargs = kfp_client.create_run_from_pipeline_package.call_args[1]
+        assert call_kwargs["experiment_name"] == "test-exp"
+        assert call_kwargs["arguments"] == {"model": "granite-3b"}
+        assert call_kwargs["run_name"] == "test-run"
+        assert call_kwargs["namespace"] == "ns"
+
+        out = capsys.readouterr().out
+        assert "new-run-id-123" in out
+
+    def test_submit_json_output(self, tmp_path, capsys):
+        config_path = self._make_config(tmp_path)
+        run_response = SimpleNamespace(run_id="new-run-id-456")
+        kfp_client = MagicMock()
+        kfp_client.create_run_from_pipeline_package.return_value = run_response
+
+        args = argparse.Namespace(
+            config=config_path, watch=False, dry_run=False,
+            override=None, run_name=None, json=True,
+        )
+        with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
+            cli.cmd_run(kfp_client, args)
+
+        import json
+        result = json.loads(capsys.readouterr().out)
+        assert result["run_id"] == "new-run-id-456"
+        assert result["experiment"] == "test-exp"
+
+    def test_submit_with_service_account(self, tmp_path):
+        config_path = self._make_config(tmp_path, extra={"service_account": "custom-sa"})
+        run_response = SimpleNamespace(run_id="run-sa")
+        kfp_client = MagicMock()
+        kfp_client.create_run_from_pipeline_package.return_value = run_response
+
+        args = argparse.Namespace(
+            config=config_path, watch=False, dry_run=False,
+            override=None, run_name=None, json=False,
+        )
+        with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
+            cli.cmd_run(kfp_client, args)
+
+        call_kwargs = kfp_client.create_run_from_pipeline_package.call_args[1]
+        assert call_kwargs["service_account"] == "custom-sa"
+
+    def test_submit_403_exits(self, tmp_path):
+        config_path = self._make_config(tmp_path)
+        kfp_client = MagicMock()
+        kfp_client.create_run_from_pipeline_package.side_effect = Exception("403 Forbidden")
+
+        args = argparse.Namespace(
+            config=config_path, watch=False, dry_run=False,
+            override=None, run_name=None, json=False,
+        )
+        with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False), \
+             pytest.raises(SystemExit, match="403 Forbidden"):
+            cli.cmd_run(kfp_client, args)
+
+    def test_submit_no_client_exits(self, tmp_path):
+        config_path = self._make_config(tmp_path)
+        args = argparse.Namespace(
+            config=config_path, watch=False, dry_run=False,
+            override=None, run_name=None, json=False,
+        )
+        with pytest.raises(SystemExit, match="KFP client is required"):
+            cli.cmd_run(None, args)
+
+    def test_submit_with_watch_delegates(self, tmp_path, capsys):
+        config_path = self._make_config(tmp_path)
+        run_response = SimpleNamespace(run_id="watch-run-id")
+        kfp_client = MagicMock()
+        kfp_client.create_run_from_pipeline_package.return_value = run_response
+
+        watch_run = _make_run(state="Succeeded")
+        kfp_client.get_run.return_value = watch_run
+
+        args = argparse.Namespace(
+            config=config_path, watch=True, dry_run=False,
+            override=None, run_name=None, json=False,
+        )
+        with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False), \
+             pytest.raises(SystemExit) as exc_info:
+            cli.cmd_run(kfp_client, args)
+
+        assert exc_info.value.code == 0
+        kfp_client.get_run.assert_called_with("watch-run-id")
+
+    def test_minimal_config(self, tmp_path, capsys):
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text("apiVersion: v1")
+        config_path = tmp_path / "config.json"
+        config_path.write_text(json.dumps({"pipeline_package": str(pipeline)}))
+
+        run_response = SimpleNamespace(run_id="minimal-run")
+        kfp_client = MagicMock()
+        kfp_client.create_run_from_pipeline_package.return_value = run_response
+
+        args = argparse.Namespace(
+            config=str(config_path), watch=False, dry_run=False,
+            override=None, run_name=None, json=False,
+        )
+        with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": ""}, clear=False):
+            cli.cmd_run(kfp_client, args)
+
+        call_kwargs = kfp_client.create_run_from_pipeline_package.call_args[1]
+        assert call_kwargs["experiment_name"] == "Default"
+        assert call_kwargs["arguments"] is None
+        assert "run_name" not in call_kwargs

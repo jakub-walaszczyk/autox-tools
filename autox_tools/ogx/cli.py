@@ -2,7 +2,8 @@
 
 Usage::
 
-    uv run ogx models [--type {all,llm,embedding,rerank}] [--json]
+    uv run ogx models [--type {all,llm,embedding,rerank}] [--metadata] [--json]
+    uv run ogx info <model-id> [--json]
     uv run ogx providers [--json]
     uv run ogx stores [--json]
     uv run ogx health [--json]
@@ -74,6 +75,17 @@ def _health_status(health: object) -> str:
     return "unknown"
 
 
+def _compact_metadata(meta: dict[str, object] | None, max_width: int = 60) -> str:
+    """Render a metadata dict as a truncated ``key=val, ...`` string."""
+    if not meta:
+        return "—"
+    parts = [f"{k}={v}" for k, v in sorted(meta.items())]
+    text = ", ".join(parts)
+    if len(text) > max_width:
+        return text[: max_width - 1] + "…"
+    return text
+
+
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -111,21 +123,110 @@ def cmd_models(client: OgxClient, args: argparse.Namespace) -> None:
         print("No models found.")
         return
 
+    show_meta = getattr(args, "metadata", False)
+
     max_id = max(len("Model ID"), max(len(m.id) for m in models))
     max_type = max(len("Type"), max(len(_model_type(m)) for m in models))
     max_prov = max(len("Provider"), max(len(getattr(m, "provider_id", "") or "—") for m in models))
 
-    header = f"  {'Model ID':<{max_id}}   {'Type':<{max_type}}   {'Provider':<{max_prov}}   Created"
+    header = f"  {'Model ID':<{max_id}}   {'Type':<{max_type}}   {'Provider':<{max_prov}}   {'Created':<16}"
+    sep = f"  {'─' * max_id}   {'─' * max_type}   {'─' * max_prov}   {'─' * 16}"
+    if show_meta:
+        header += "   Metadata"
+        sep += "   " + "─" * 8
     print(header)
-    print(f"  {'─' * max_id}   {'─' * max_type}   {'─' * max_prov}   {'─' * 16}")
+    print(sep)
     for m in models:
         mid = m.id
         mtype = _model_type(m)
         prov = getattr(m, "provider_id", None) or "—"
         created = _format_ts(m.created)
-        print(f"  {mid:<{max_id}}   {mtype:<{max_type}}   {prov:<{max_prov}}   {created}")
+        row = f"  {mid:<{max_id}}   {mtype:<{max_type}}   {prov:<{max_prov}}   {created:<16}"
+        if show_meta:
+            row += "   " + _compact_metadata(getattr(m, "metadata", None))
+        print(row)
 
     print(f"\n  {len(models)} model(s)")
+
+
+def cmd_info(client: OgxClient, args: argparse.Namespace) -> None:
+    """Show detailed information and metadata for a single model."""
+    model_id: str = args.model_id
+
+    try:
+        model = client.models.retrieve(model_id)
+    except Exception as exc:
+        sys.exit(f"Model '{model_id}' not found: {exc}")
+
+    mid = getattr(model, "id", None) or getattr(model, "name", None) or model_id
+    display_name = getattr(model, "display_name", None)
+    mtype = _model_type(model)
+    provider = getattr(model, "provider_id", None)
+    provider_res = getattr(model, "provider_resource_id", None)
+    owned_by = getattr(model, "owned_by", None)
+    created = getattr(model, "created", None)
+    created_at = getattr(model, "created_at", None)
+    description = getattr(model, "description", None)
+    max_input = getattr(model, "max_input_tokens", None)
+    max_out = getattr(model, "max_tokens", None)
+    meta: dict[str, object] | None = getattr(model, "metadata", None)
+
+    if args.json:
+        data: dict[str, object] = {"id": mid, "model_type": mtype}
+        if display_name:
+            data["display_name"] = display_name
+        if provider:
+            data["provider_id"] = provider
+        if provider_res:
+            data["provider_resource_id"] = provider_res
+        if owned_by:
+            data["owned_by"] = owned_by
+        if created is not None:
+            data["created"] = created
+        if created_at:
+            data["created_at"] = created_at
+        if description:
+            data["description"] = description
+        if max_input is not None:
+            data["max_input_tokens"] = max_input
+        if max_out is not None:
+            data["max_tokens"] = max_out
+        if meta:
+            data["metadata"] = meta
+        _print_json(data)
+        return
+
+    fields: list[tuple[str, str]] = [("Model", mid)]
+    if display_name:
+        fields.append(("Display name", display_name))
+    if mtype != "unknown":
+        fields.append(("Type", mtype))
+    if provider:
+        fields.append(("Provider", provider))
+    if provider_res:
+        fields.append(("Resource ID", provider_res))
+    if owned_by:
+        fields.append(("Owned by", owned_by))
+    if created is not None:
+        fields.append(("Created", _format_ts(created)))
+    if created_at:
+        fields.append(("Created at", str(created_at)))
+    if description:
+        fields.append(("Description", description))
+    if max_input is not None:
+        fields.append(("Max input tokens", f"{max_input:,}"))
+    if max_out is not None:
+        fields.append(("Max output tokens", f"{max_out:,}"))
+
+    label_w = max(len(label) for label, _ in fields)
+    for label, value in fields:
+        print(f"  {label:<{label_w}} : {value}")
+
+    if meta:
+        meta_w = max(len(k) for k in meta)
+        print("  Metadata")
+        for k in sorted(meta):
+            print(f"    {k:<{meta_w}} : {meta[k]}")
 
 
 def cmd_providers(client: OgxClient, args: argparse.Namespace) -> None:
@@ -394,6 +495,15 @@ def _build_parser() -> argparse.ArgumentParser:
         default="all",
         help="Filter by model type (default: all)",
     )
+    p.add_argument(
+        "--metadata", "-m",
+        action="store_true",
+        help="Show metadata column in table output",
+    )
+
+    # info
+    p = sub.add_parser("info", help="Show detailed model information and metadata")
+    p.add_argument("model_id", help="Model ID to inspect")
 
     # providers
     sub.add_parser("providers", help="List vector store providers")
@@ -428,6 +538,7 @@ def main() -> None:
 
     commands = {
         "models": cmd_models,
+        "info": cmd_info,
         "providers": cmd_providers,
         "stores": cmd_stores,
         "health": cmd_health,

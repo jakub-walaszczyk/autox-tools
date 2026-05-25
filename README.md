@@ -26,11 +26,32 @@ uv run milvus --help
 
 | Entry point | Package | Description |
 |---|---|---|
+| `pipelines` | [`autox_tools/pipelines/`](autox_tools/pipelines/README.md) | Submit, monitor, and inspect Kubeflow Pipeline runs -- run submission, status, live progress, pod logs, and S3 artifacts |
+| `experiments` | [`autox_tools/experiments/`](autox_tools/experiments/README.md) | Analyze and compare experiment results -- metrics display, side-by-side comparison, and artifact export |
+| `s3` | [`autox_tools/s3/`](autox_tools/s3/README.md) | Browse, download, upload, and clean up S3/MinIO experiment artifacts |
 | `milvus` | [`autox_tools/milvus/`](autox_tools/milvus/README.md) | Manage remote Milvus vector database instances -- list, inspect, query, export, and maintain collections |
 | `ogx` | [`autox_tools/ogx/`](autox_tools/ogx/README.md) | Inspect and test models, providers, and vector stores on an OGX gateway |
-| `pipelines` | [`autox_tools/pipelines/`](autox_tools/pipelines/README.md) | Monitor and inspect Kubeflow Pipeline runs -- status, live progress, pod logs, and S3 artifacts |
-| `s3` | [`autox_tools/s3/`](autox_tools/s3/README.md) | Browse, download, upload, and clean up S3/MinIO experiment artifacts |
 | `secrets` | [`autox_tools/secrets/`](autox_tools/secrets/README.md) | Manage Kubernetes Opaque secrets -- list, decode, create, update, and delete key-value secrets |
+
+## Typical workflow
+
+Submit an AutoRAG or AutoML experiment, monitor it, and inspect results -- all from the terminal:
+
+```bash
+# 1. Submit a pipeline run from a JSON config
+uv run pipelines run autorag-config.json --watch
+
+# 2. Once complete, view evaluation metrics
+uv run experiments results <run-id>
+
+# 3. Compare against a previous run
+uv run experiments compare <run-id-1> <run-id-2>
+
+# 4. Download artifacts for offline analysis
+uv run pipelines artifacts <run-id> --download ./results/
+```
+
+See the [pipelines README](autox_tools/pipelines/README.md) for example config files for AutoRAG and AutoML.
 
 ## Configuration
 

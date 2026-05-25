@@ -1,6 +1,6 @@
 # `pipelines` -- KFP Pipeline Management CLI
 
-Monitor, inspect, and debug Kubeflow Pipeline runs on OpenShift AI. Provides run status tracking, live progress monitoring, pod log retrieval, and S3 artifact browsing -- everything operators need without navigating the KFP dashboard.
+Monitor, inspect, debug, and launch Kubeflow Pipeline runs on OpenShift AI. Provides run submission from config files, status tracking, live progress monitoring, pod log retrieval, and S3 artifact browsing -- everything operators need without navigating the KFP dashboard.
 
 ## Setup
 
@@ -49,6 +49,97 @@ uv run pipelines list --limit 5
 ## Commands
 
 All commands accept a global `--json` flag for machine-readable output.
+
+### `run` -- Submit a pipeline run
+
+Submit a pipeline run from a JSON config file that references a compiled KFP pipeline YAML and its parameters.
+
+```bash
+uv run pipelines run config.json                         # Submit and print run ID
+uv run pipelines run config.json --watch                 # Submit and auto-monitor
+uv run pipelines run config.json --dry-run               # Validate config without submitting
+uv run pipelines run config.json --override optimization_metric=answer_correctness
+uv run pipelines run config.json --run-name "my-run"     # Override run display name
+uv run pipelines --json run config.json                  # JSON output
+```
+
+#### Config file format
+
+| Field | Required | Description |
+|---|---|---|
+| `pipeline_package` | Yes | Path to compiled KFP pipeline YAML (absolute or relative to config file) |
+| `experiment` | No | KFP experiment name for grouping (default: `Default`) |
+| `run_name` | No | Display name for the run (auto-generated if omitted) |
+| `parameters` | No | Dict of pipeline parameters passed to KFP |
+| `service_account` | No | Kubernetes service account for the run |
+
+The `--dry-run` flag skips KFP authentication entirely, making it useful for config validation in CI or before credentials are available.
+
+#### AutoRAG example config
+
+AutoRAG optimizes RAG pipelines via the `documents_rag_optimization_pipeline` from [ai4rag](https://github.com/IBM/ai4rag). It explores embedding and generation model combinations, evaluates RAG patterns against a test dataset, and selects the best configuration by the specified quality metric.
+
+```json
+{
+  "pipeline_package": "pipelines/documents-rag-optimization.yaml",
+  "experiment": "autorag-evaluation",
+  "run_name": "faithfulness-eval-001",
+  "parameters": {
+    "test_data_secret_name": "test-data-s3-credentials",
+    "test_data_bucket_name": "test-data",
+    "test_data_key": "qa-pairs/golden-set.json",
+    "input_data_secret_name": "input-docs-s3-credentials",
+    "input_data_bucket_name": "knowledge-base",
+    "input_data_key": "product-manuals/",
+    "ogx_secret_name": "ogx-api-credentials",
+    "vector_io_provider_id": "milvus-prod",
+    "embedding_models": ["bge-large-en-v1.5", "all-minilm-l6-v2"],
+    "generation_models": ["granite-3b-code-instruct", "granite-8b-code-instruct"],
+    "optimization_metric": "faithfulness",
+    "optimization_max_rag_patterns": 8
+  },
+  "service_account": "pipeline-runner-sa"
+}
+```
+
+Parameter reference:
+
+| Parameter | Required | Description |
+|---|---|---|
+| `test_data_secret_name` | Yes | K8S secret with S3 credentials for the test data bucket |
+| `test_data_bucket_name` | Yes | S3 bucket containing the test data file |
+| `test_data_key` | Yes | Object key of the test data JSON file |
+| `input_data_secret_name` | Yes | K8S secret with S3 credentials for the input documents bucket |
+| `input_data_bucket_name` | Yes | S3 bucket containing the input documents |
+| `input_data_key` | No | Object key prefix for input documents (default: bucket root) |
+| `ogx_secret_name` | Yes | K8S secret with `OGX_CLIENT_API_KEY` and `OGX_CLIENT_BASE_URL` |
+| `vector_io_provider_id` | Yes | Vector I/O provider registered in OGX (e.g. Milvus instance) |
+| `embedding_models` | No | List of embedding model IDs to include in the search space |
+| `generation_models` | No | List of generation/LLM model IDs to include in the search space |
+| `optimization_metric` | No | Quality metric: `faithfulness`, `answer_correctness`, or `context_correctness` (default: `faithfulness`) |
+| `optimization_max_rag_patterns` | No | Maximum RAG patterns to generate (default: `8`) |
+
+#### AutoML example config
+
+AutoML automates model selection and hyperparameter tuning using [AutoGluon](https://auto.gluon.ai/) as its optimization backend. Parameters map to the compiled `automl-pipeline.yaml` from [pipelines-components](https://github.com/opendatahub-io/pipelines-components).
+
+```json
+{
+  "pipeline_package": "pipelines/automl-pipeline.yaml",
+  "experiment": "automl-tabular",
+  "run_name": "sales-forecast-autogluon-001",
+  "parameters": {
+    "dataset_path": "s3://datasets/sales-data/train.csv",
+    "target_column": "revenue",
+    "task_type": "regression",
+    "time_limit": "3600",
+    "preset": "best_quality",
+    "eval_metric": "root_mean_squared_error",
+    "output": "s3://artifacts/automl-runs/sales-forecast-001/"
+  },
+  "service_account": "pipeline-runner-sa"
+}
+```
 
 ### `status` -- Get run status
 
@@ -184,6 +275,31 @@ uv run pipelines artifacts abc-123-def-456 --pattern Pattern1 --artifact evaluat
 
 # Download an entire pattern's artifacts
 uv run pipelines artifacts abc-123-def-456 --pattern Pattern1 --download ./pattern-results/
+```
+
+### Submit and monitor an AutoRAG experiment
+
+```bash
+# Validate the config first
+uv run pipelines run autorag-config.json --dry-run
+
+# Submit with a different optimization target and watch progress
+uv run pipelines run autorag-config.json --override optimization_metric=answer_correctness --watch
+
+# Or submit, then inspect results later
+uv run pipelines run autorag-config.json
+uv run pipelines status <run-id>
+uv run experiments results <run-id>
+```
+
+### Submit an AutoML training run
+
+```bash
+# Dry-run to verify parameters
+uv run pipelines run automl-config.json --dry-run
+
+# Submit with a shorter time limit for quick iteration
+uv run pipelines run automl-config.json --override time_limit=600 --watch
 ```
 
 ### Monitor a running pipeline
