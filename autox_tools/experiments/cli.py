@@ -19,96 +19,65 @@ from typing import Any
 from autox_tools.experiments._artifacts import (
     _CATEGORY_LABELS,
     ArtifactCategory,
-    extract_metrics,
     list_and_categorize,
 )
 from autox_tools.experiments._display import (
     delta_indicator,
+    filter_metric_dict,
+    filter_metric_names,
+    format_best_patterns,
+    format_compare_header,
     format_duration,
+    format_leaderboard,
+    format_pattern_detail,
+    format_pattern_settings,
+    format_pipeline_params,
+    format_run_header,
     format_size,
+    format_summary_metrics,
     is_lower_better,
+    short_id,
+)
+from autox_tools.experiments._patterns import (
+    RunPatternData,
+    collect_run_data,
+    parse_names,
 )
 from autox_tools.experiments._resolver import resolve
-from autox_tools.s3.cli import _paginate_objects
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-_EVAL_RESULTS_SUBPATHS = [
-    "evaluation_results.json",
-    "evaluation/evaluation_results.json",
-    "results/evaluation_results.json",
-]
-
-_METRICS_SUBPATHS = [
-    "metrics.json",
-    "results/metrics.json",
-]
 
 
 def _print_json(data: object) -> None:
     print(json.dumps(data, indent=2, default=str))
 
 
-def _download_json(s3_client: Any, bucket: str, key: str) -> dict | list | None:
-    """Download and parse a JSON file from S3.  Returns None on failure."""
-    try:
-        response = s3_client.get_object(Bucket=bucket, Key=key)
-        return json.loads(response["Body"].read())
-    except Exception:
+def _get_display_name(
+    run_id: str, names: dict[str, str],
+) -> str:
+    """Resolve a human-readable display name for a run."""
+    return names.get(run_id, run_id)
+
+
+def _find_best_pattern(
+    data: RunPatternData,
+    sort_metric: str | None,
+) -> Any | None:
+    """Return the top-ranked pattern for the given metric."""
+    if not data.patterns or not sort_metric:
         return None
-
-
-def _find_results_recursive(
-    s3_client: Any, bucket: str, prefix: str,
-) -> tuple[dict | list | None, str | None]:
-    """Scan the full prefix tree for result files.
-
-    Falls back to a recursive S3 listing when the result files are nested
-    deeper than the well-known subpaths (e.g. inside
-    ``rag-templates-optimization/<id>/rag_patterns/``).  Prefers
-    ``evaluation_results.json`` over ``metrics.json``.
-    """
-    result = _paginate_objects(s3_client, bucket, prefix)
-    eval_key: str | None = None
-    metrics_key: str | None = None
-    for obj in result.get("Contents", []):
-        key: str = obj["Key"]
-        basename = key.rsplit("/", 1)[-1]
-        if basename == "evaluation_results.json" and eval_key is None:
-            eval_key = key
-        elif basename == "metrics.json" and metrics_key is None:
-            metrics_key = key
-        if eval_key:
-            break
-
-    chosen = eval_key or metrics_key
-    if chosen:
-        data = _download_json(s3_client, bucket, chosen)
-        if data is not None:
-            return data, chosen
-    return None, None
-
-
-def _find_results(
-    s3_client: Any, bucket: str, prefix: str,
-) -> tuple[dict | list | None, str | None]:
-    """Locate and download the evaluation results file.
-
-    Tries ``evaluation_results.json`` first (AutoRAG), then
-    ``metrics.json`` (AutoML), at well-known sub-paths under *prefix*.
-    When none of the shallow paths match, falls back to a recursive
-    listing of the entire prefix tree.
-    Returns ``(parsed_json, s3_key)`` or ``(None, None)``.
-    """
-    prefix = prefix.rstrip("/") + "/" if prefix and not prefix.endswith("/") else prefix
-    for subpath in _EVAL_RESULTS_SUBPATHS + _METRICS_SUBPATHS:
-        key = f"{prefix}{subpath}"
-        data = _download_json(s3_client, bucket, key)
-        if data is not None:
-            return data, key
-    return _find_results_recursive(s3_client, bucket, prefix)
+    reverse = not is_lower_better(sort_metric)
+    ranked = sorted(
+        data.patterns,
+        key=lambda p: p.metrics.get(
+            sort_metric,
+            float("-inf") if reverse else float("inf"),
+        ),
+        reverse=reverse,
+    )
+    return ranked[0]
 
 
 # ---------------------------------------------------------------------------
@@ -117,103 +86,171 @@ def _find_results(
 
 def cmd_results(kfp_client: Any, s3_client: Any, args: argparse.Namespace) -> None:
     """Display experiment results for a pipeline run."""
-    location = resolve(
+    names = parse_names(getattr(args, "names", None))
+
+    data = collect_run_data(
         kfp_client, s3_client, args.run_id,
-        explicit_prefix=args.prefix, explicit_bucket=args.bucket,
+        explicit_prefix=args.prefix,
+        explicit_bucket=args.bucket,
+        names=names,
     )
-    if not location:
+    if data is None:
         sys.exit(f"Could not locate artifacts for run {args.run_id}.")
 
-    data, key = _find_results(s3_client, location.bucket, location.prefix)
-    if data is None:
+    if not data.summary_metrics and not data.patterns:
         sys.exit(
-            f"No evaluation_results.json or metrics.json found under "
-            f"s3://{location.bucket}/{location.prefix}"
+            f"No evaluation_results.json or metrics.json found for run {args.run_id}."
         )
 
     if args.json:
-        _print_json(data)
+        _print_json(_run_data_to_dict(data))
         return
 
-    metrics = extract_metrics(data)
+    pdf_path = getattr(args, "pdf", None)
+    if pdf_path:
+        from autox_tools.experiments._report import generate_results_pdf, require_matplotlib
+        require_matplotlib()
+        generate_results_pdf(data, pdf_path, names)
+        print(f"PDF report saved to {pdf_path}")
+        return
 
-    print(f"Experiment Results: run {args.run_id}")
-    print(f"Source: s3://{location.bucket}/{key}\n")
+    # Console output
+    print(format_run_header(
+        data.run_id, data.display_name, data.source_key,
+        pipeline_name=data.pipeline_name,
+        state=data.state,
+        duration_seconds=data.duration_seconds,
+        created_at=data.created_at,
+    ))
 
-    if metrics:
-        max_name = max(len(k) for k in metrics)
-        for name, value in sorted(metrics.items()):
-            formatted = f"{value:.4f}" if isinstance(value, float) else str(value)
-            print(f"  {name:<{max_name}}  {formatted}")
+    if data.pipeline_params:
+        print(format_pipeline_params(data.pipeline_params))
 
-    if isinstance(data, list):
-        print(f"\nPatterns evaluated: {len(data)}")
-    else:
-        patterns_evaluated = data.get("patterns_evaluated")
-        best_pattern = data.get("best_pattern")
-        if patterns_evaluated is not None:
-            print(f"\nPatterns evaluated: {patterns_evaluated}")
-        if best_pattern:
-            bp_name = best_pattern.get("name", best_pattern) if isinstance(best_pattern, dict) else best_pattern
-            print(f"Best pattern: {bp_name}")
+    filtered_summary = filter_metric_dict(data.summary_metrics)
+    print(format_summary_metrics(filtered_summary, data.primary_metric))
+
+    if data.patterns:
+        sort_by = getattr(args, "sort_by", None) or data.primary_metric
+        all_metrics = filter_metric_names(_collect_all_metric_names(data))
+        print(format_leaderboard(data.patterns, sort_by, all_metrics))
+
+        if getattr(args, "detailed", False):
+            top_n = getattr(args, "top_n", 1) or 1
+            print(format_best_patterns(data.patterns, sort_by, n=top_n))
+
+            print(f"\n  {'=' * 60}")
+            print("  Per-Pattern Detail")
+            print(f"  {'=' * 60}")
+            for pattern in data.patterns:
+                print(format_pattern_detail(pattern))
+
+    print()
+
+
+def _try_collect(
+    kfp_client: Any,
+    s3_client: Any,
+    run_id: str,
+    *,
+    explicit_prefix: str | None = None,
+    explicit_bucket: str | None = None,
+    names: dict[str, str] | None = None,
+) -> RunPatternData | None:
+    """Wrapper around ``collect_run_data`` that catches unexpected errors."""
+    try:
+        return collect_run_data(
+            kfp_client, s3_client, run_id,
+            explicit_prefix=explicit_prefix,
+            explicit_bucket=explicit_bucket,
+            names=names,
+        )
+    except Exception as exc:
+        print(f"Warning: failed to fetch data for run {run_id}: {exc}", file=sys.stderr)
+        return None
 
 
 def cmd_compare(kfp_client: Any, s3_client: Any, args: argparse.Namespace) -> None:
     """Side-by-side metric comparison of two pipeline runs."""
     from tabulate import tabulate
 
-    loc1 = resolve(
+    names = parse_names(getattr(args, "names", None))
+
+    data1 = _try_collect(
         kfp_client, s3_client, args.run_id_1,
-        explicit_prefix=args.prefix1, explicit_bucket=args.bucket,
+        explicit_prefix=args.prefix1,
+        explicit_bucket=args.bucket,
+        names=names,
     )
-    loc2 = resolve(
+    data2 = _try_collect(
         kfp_client, s3_client, args.run_id_2,
-        explicit_prefix=args.prefix2, explicit_bucket=args.bucket,
+        explicit_prefix=args.prefix2,
+        explicit_bucket=args.bucket,
+        names=names,
     )
 
-    if not loc1:
-        sys.exit(f"Could not locate artifacts for run {args.run_id_1}.")
-    if not loc2:
-        sys.exit(f"Could not locate artifacts for run {args.run_id_2}.")
-
-    data1, _ = _find_results(s3_client, loc1.bucket, loc1.prefix)
-    data2, _ = _find_results(s3_client, loc2.bucket, loc2.prefix)
-
+    errors: list[str] = []
     if data1 is None:
-        sys.exit(f"No results found for run {args.run_id_1}.")
+        errors.append(f"Could not locate artifacts for run {args.run_id_1}.")
+    elif not data1.summary_metrics and not data1.patterns:
+        errors.append(f"No results found for run {args.run_id_1}.")
     if data2 is None:
-        sys.exit(f"No results found for run {args.run_id_2}.")
+        errors.append(f"Could not locate artifacts for run {args.run_id_2}.")
+    elif not data2.summary_metrics and not data2.patterns:
+        errors.append(f"No results found for run {args.run_id_2}.")
+    if errors:
+        sys.exit("\n".join(errors))
 
-    metrics1 = extract_metrics(data1)
-    metrics2 = extract_metrics(data2)
+    if args.json:
+        _print_json(_compare_data_to_dict(data1, data2, args.metrics))
+        return
 
-    all_metrics = sorted(set(metrics1) | set(metrics2))
+    pdf_path = getattr(args, "pdf", None)
+    if pdf_path:
+        from autox_tools.experiments._report import generate_compare_pdf, require_matplotlib
+        require_matplotlib()
+        generate_compare_pdf(data1, data2, pdf_path, names)
+        print(f"PDF report saved to {pdf_path}")
+        return
+
+    # Console output
+    print(format_compare_header(
+        data1.run_id, data2.run_id, data1.display_name, data2.display_name,
+        pipeline1=data1.pipeline_name, pipeline2=data2.pipeline_name,
+        duration1=data1.duration_seconds, duration2=data2.duration_seconds,
+        state1=data1.state, state2=data2.state,
+    ))
+
+    # Filter and sort metrics for display
+    filtered1 = filter_metric_dict(data1.summary_metrics)
+    filtered2 = filter_metric_dict(data2.summary_metrics)
+    all_metrics = sorted(set(filtered1) | set(filtered2))
     if args.metrics:
         requested = {m.strip() for m in args.metrics.split(",")}
         all_metrics = [m for m in all_metrics if m in requested]
 
-    if args.json:
-        deltas = {}
-        for m in all_metrics:
-            v1 = metrics1.get(m)
-            v2 = metrics2.get(m)
-            if v1 is not None and v2 is not None:
-                deltas[m] = v2 - v1
-        _print_json({
-            "run_1": {"id": args.run_id_1, "metrics": {m: metrics1.get(m) for m in all_metrics}},
-            "run_2": {"id": args.run_id_2, "metrics": {m: metrics2.get(m) for m in all_metrics}},
-            "deltas": deltas,
-        })
-        return
+    primary = data1.primary_metric or data2.primary_metric
+    if primary and primary in all_metrics:
+        all_metrics.remove(primary)
+        all_metrics.insert(0, primary)
 
-    short1 = args.run_id_1[-8:]
-    short2 = args.run_id_2[-8:]
-    print(f"Comparison: run ...{short1} vs run ...{short2}\n")
+    label1 = (
+        data1.display_name
+        if data1.display_name != data1.run_id
+        else short_id(data1.run_id)
+    )
+    label2 = (
+        data2.display_name
+        if data2.display_name != data2.run_id
+        else short_id(data2.run_id)
+    )
+
+    print("\n  Summary Metrics")
+    print(f"  {'-' * 60}")
 
     rows: list[list[str]] = []
     for m in all_metrics:
-        v1 = metrics1.get(m)
-        v2 = metrics2.get(m)
+        v1 = filtered1.get(m)
+        v2 = filtered2.get(m)
         v1_str = f"{v1:.4f}" if isinstance(v1, float) else (str(v1) if v1 is not None else "—")
         v2_str = f"{v2:.4f}" if isinstance(v2, float) else (str(v2) if v2 is not None else "—")
 
@@ -225,13 +262,43 @@ def cmd_compare(kfp_client: Any, s3_client: Any, args: argparse.Namespace) -> No
 
         rows.append([m, v1_str, v2_str, delta_str])
 
-    print(tabulate(rows, headers=["Metric", "Run 1", "Run 2", "Delta"], tablefmt="simple"))
+    table = tabulate(rows, headers=["Metric", label1, label2, "Delta"], tablefmt="simple")
+    for line in table.splitlines():
+        print(f"  {line}")
 
-    primary = all_metrics[0] if all_metrics else None
-    if primary and primary in metrics1 and primary in metrics2:
+    if primary and primary in filtered1 and primary in filtered2:
         lib = is_lower_better(primary)
-        winner = "Run 1" if (metrics1[primary] < metrics2[primary]) == lib else "Run 2"
-        print(f"\nWinner by {primary}: {winner}")
+        winner = label1 if (filtered1[primary] < filtered2[primary]) == lib else label2
+        print(f"\n  Winner by {primary}: {winner}")
+
+    # Per-pattern comparison (detailed mode only)
+    if getattr(args, "detailed", False) and data1.patterns and data2.patterns:
+        pm = data1.primary_metric or data2.primary_metric
+        all_m1 = filter_metric_names(_collect_all_metric_names(data1))
+        all_m2 = filter_metric_names(_collect_all_metric_names(data2))
+
+        print(f"\n  {'=' * 60}")
+        print("  Per-Pattern Leaderboard Comparison")
+        print(f"  {'=' * 60}")
+
+        print(f"\n  --- {label1} ---")
+        print(format_leaderboard(data1.patterns, pm, all_m1))
+        print(f"\n  --- {label2} ---")
+        print(format_leaderboard(data2.patterns, pm, all_m2))
+
+        best1 = _find_best_pattern(data1, pm)
+        best2 = _find_best_pattern(data2, pm)
+        if best1 or best2:
+            print("\n  Best Pattern Settings")
+            print(f"  {'-' * 60}")
+            if best1:
+                print(f"\n  {label1} ({best1.name}):")
+                print(format_pattern_settings(best1))
+            if best2:
+                print(f"\n  {label2} ({best2.name}):")
+                print(format_pattern_settings(best2))
+
+    print()
 
 
 def cmd_export(kfp_client: Any, s3_client: Any, args: argparse.Namespace) -> None:
@@ -247,8 +314,8 @@ def cmd_export(kfp_client: Any, s3_client: Any, args: argparse.Namespace) -> Non
     if not artifacts:
         sys.exit(f"No artifacts found under s3://{location.bucket}/{location.prefix}")
 
-    short_id = args.run_id[:8]
-    output_dir = args.output or f"./experiment-{short_id}"
+    short_id_str = args.run_id[:8]
+    output_dir = args.output or f"./experiment-{short_id_str}"
 
     print(f"Exporting artifacts for run {args.run_id}...\n")
 
@@ -363,6 +430,79 @@ def cmd_info(kfp_client: Any, s3_client: Any, args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# JSON serialization helpers
+# ---------------------------------------------------------------------------
+
+
+def _run_data_to_dict(data: RunPatternData) -> dict:
+    """Serialize RunPatternData for JSON output."""
+    result: dict[str, Any] = {
+        "run_id": data.run_id,
+        "display_name": data.display_name,
+        "summary_metrics": data.summary_metrics,
+        "primary_metric": data.primary_metric,
+    }
+    if data.patterns:
+        result["patterns"] = [
+            {"name": p.name, "metrics": p.metrics}
+            for p in data.patterns
+        ]
+    return result
+
+
+def _compare_data_to_dict(
+    data1: RunPatternData,
+    data2: RunPatternData,
+    metrics_filter: str | None = None,
+) -> dict:
+    """Serialize comparison data for JSON output."""
+    all_metrics = sorted(set(data1.summary_metrics) | set(data2.summary_metrics))
+    if metrics_filter:
+        requested = {m.strip() for m in metrics_filter.split(",")}
+        all_metrics = [m for m in all_metrics if m in requested]
+
+    deltas = {}
+    for m in all_metrics:
+        v1 = data1.summary_metrics.get(m)
+        v2 = data2.summary_metrics.get(m)
+        if v1 is not None and v2 is not None:
+            deltas[m] = v2 - v1
+
+    result: dict[str, Any] = {
+        "run_1": {
+            "id": data1.run_id,
+            "display_name": data1.display_name,
+            "metrics": {m: data1.summary_metrics.get(m) for m in all_metrics},
+        },
+        "run_2": {
+            "id": data2.run_id,
+            "display_name": data2.display_name,
+            "metrics": {m: data2.summary_metrics.get(m) for m in all_metrics},
+        },
+        "deltas": deltas,
+    }
+
+    if data1.patterns:
+        result["run_1"]["patterns"] = [
+            {"name": p.name, "metrics": p.metrics} for p in data1.patterns
+        ]
+    if data2.patterns:
+        result["run_2"]["patterns"] = [
+            {"name": p.name, "metrics": p.metrics} for p in data2.patterns
+        ]
+
+    return result
+
+
+def _collect_all_metric_names(data: RunPatternData) -> list[str]:
+    """Gather all metric names from patterns, sorted."""
+    names: set[str] = set()
+    for p in data.patterns:
+        names.update(p.metrics)
+    return sorted(names)
+
+
+# ---------------------------------------------------------------------------
 # CLI wiring
 # ---------------------------------------------------------------------------
 
@@ -380,6 +520,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("run_id", help="KFP run ID (UUID)")
     p.add_argument("--prefix", help="Explicit S3 prefix override (skip auto-resolution)")
     p.add_argument("--bucket", help="Explicit bucket override")
+    p.add_argument("--pdf", metavar="PATH", help="Generate a PDF report at PATH")
+    p.add_argument("--names", help='Display name mapping (e.g. "run-id=My Experiment")')
+    p.add_argument("--sort-by", dest="sort_by", metavar="METRIC", help="Metric to rank the leaderboard by")
+    p.add_argument("--detailed", "-d", action="store_true", help="Show pattern settings and per-pattern detail")
+    p.add_argument(
+        "--top-n", dest="top_n", type=int, default=1, metavar="N",
+        help="Number of top patterns to show in detailed mode (default: 1)",
+    )
 
     # compare
     p = sub.add_parser("compare", help="Side-by-side metric comparison of two runs")
@@ -389,6 +537,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--prefix1", help="Explicit S3 prefix for run 1")
     p.add_argument("--prefix2", help="Explicit S3 prefix for run 2")
     p.add_argument("--bucket", help="Explicit bucket override (shared for both runs)")
+    p.add_argument("--pdf", metavar="PATH", help="Generate a PDF report at PATH")
+    p.add_argument("--names", help='Display name mapping (e.g. "id1=Baseline,id2=New Config")')
+    p.add_argument("--detailed", "-d", action="store_true", help="Show per-run leaderboards and pattern settings")
 
     # export
     p = sub.add_parser("export", help="Download all experiment artifacts")

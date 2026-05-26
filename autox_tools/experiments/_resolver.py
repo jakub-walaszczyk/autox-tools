@@ -14,12 +14,15 @@ fall through to the next.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any
 
 from autox_tools.pipelines.cli import _get_pipeline_name
 from autox_tools.s3.cli import _paginate_objects
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -47,6 +50,7 @@ def resolve(
     if explicit_prefix is not None:
         bucket = explicit_bucket or os.getenv("ARTIFACTS_S3_BUCKET", "")
         if not bucket:
+            logger.debug("Explicit prefix given but no bucket (set ARTIFACTS_S3_BUCKET)")
             return None
         return ArtifactLocation(bucket=bucket, prefix=explicit_prefix, source="explicit")
 
@@ -55,14 +59,24 @@ def resolve(
 
     location = _try_run_params(run_obj)
     if location:
+        logger.debug("Resolved via run params: s3://%s/%s", location.bucket, location.prefix)
         return _refine_prefix(s3_client, location, run_id)
+
+    logger.debug("Run params did not yield a location for %s", run_id)
 
     pipeline_name = _get_pipeline_name(run_obj)
     bucket = explicit_bucket or os.getenv("ARTIFACTS_S3_BUCKET", "")
     if bucket:
         location = _try_scan(s3_client, bucket, run_id, pipeline_name)
         if location:
+            logger.debug("Resolved via scan: s3://%s/%s", location.bucket, location.prefix)
             return location
+        logger.debug(
+            "Scan found no artifacts for %s in bucket %s (pipeline=%s)",
+            run_id, bucket, pipeline_name,
+        )
+    else:
+        logger.debug("No bucket available for scan (set ARTIFACTS_S3_BUCKET)")
 
     return None
 
@@ -82,16 +96,34 @@ def _try_run_params(run_obj: Any) -> ArtifactLocation | None:
     if not artifact_root:
         return None
 
-    if artifact_root.startswith("s3://"):
-        cleaned = artifact_root[5:]
-        parts = cleaned.split("/", 1)
-        bucket = parts[0]
-        prefix = parts[1] if len(parts) == 2 else ""
-        return ArtifactLocation(bucket=bucket, prefix=prefix, source="run_params")
+    parsed = _parse_object_url(artifact_root)
+    if parsed:
+        return ArtifactLocation(bucket=parsed[0], prefix=parsed[1], source="run_params")
 
     bucket = os.getenv("ARTIFACTS_S3_BUCKET", "")
     if bucket:
         return ArtifactLocation(bucket=bucket, prefix=artifact_root, source="run_params")
+
+    return None
+
+
+def _parse_object_url(url: str) -> tuple[str, str] | None:
+    """Extract ``(bucket, prefix)`` from an S3-style URL.
+
+    Handles ``s3://``, ``minio://``, and ``https://<host>/<bucket>/...``
+    endpoint formats.  Returns ``None`` for unrecognised schemes.
+    """
+    for scheme in ("s3://", "minio://"):
+        if url.startswith(scheme):
+            cleaned = url[len(scheme):]
+            parts = cleaned.split("/", 1)
+            return parts[0], (parts[1] if len(parts) == 2 else "")
+
+    if url.startswith("https://") or url.startswith("http://"):
+        without_scheme = url.split("://", 1)[1]
+        segments = without_scheme.split("/", 2)
+        if len(segments) >= 2:
+            return segments[1], (segments[2] if len(segments) == 3 else "")
 
     return None
 
@@ -118,6 +150,13 @@ _SCAN_TEMPLATES = [
     "artifacts/{run_id}/",
     "{run_id}/",
     "pipeline_runs/{run_id}/",
+    "runs/{run_id}/",
+]
+
+_PIPELINE_SCAN_TEMPLATES = [
+    "{pipeline_name}/{run_id}/",
+    "pipelines/{pipeline_name}/{run_id}/",
+    "{pipeline_name}/runs/{run_id}/",
 ]
 
 
@@ -130,7 +169,10 @@ def _try_scan(
     """Probe common prefix patterns for artifacts."""
     candidates = [t.format(run_id=run_id) for t in _SCAN_TEMPLATES]
     if pipeline_name:
-        candidates.append(f"{pipeline_name}/{run_id}/")
+        candidates.extend(
+            t.format(pipeline_name=pipeline_name, run_id=run_id)
+            for t in _PIPELINE_SCAN_TEMPLATES
+        )
 
     for prefix in candidates:
         probe = _paginate_objects(s3_client, bucket, prefix, max_keys=1)

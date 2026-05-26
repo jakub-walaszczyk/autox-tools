@@ -118,6 +118,17 @@ def extract_metrics(data: dict | list) -> dict[str, float]:
                 aggregated[key] = sum(values) / len(values)
         return aggregated
 
+    scores = data.get("scores")
+    if isinstance(scores, dict):
+        result: dict[str, float] = {}
+        for name, score_data in scores.items():
+            if isinstance(score_data, dict) and "mean" in score_data:
+                mean = score_data["mean"]
+                if isinstance(mean, (int, float)):
+                    result[name] = float(mean)
+        if result:
+            return result
+
     source = data
     if "metrics" in data and isinstance(data["metrics"], dict):
         source = data["metrics"]
