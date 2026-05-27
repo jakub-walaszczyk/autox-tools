@@ -128,6 +128,7 @@ def _args(**kwargs: object) -> argparse.Namespace:
         "json": False,
         "command": "health",
         "metadata": False,
+        "type": "all",
     }
     defaults.update(kwargs)
     return argparse.Namespace(**defaults)
@@ -709,6 +710,166 @@ class TestCmdCheck:
 
 
 # ---------------------------------------------------------------------------
+# cmd_check all-models tests
+# ---------------------------------------------------------------------------
+
+class TestCmdCheckAll:
+    def test_all_models_pass(self, capsys: pytest.CaptureFixture[str]):
+        models = [
+            _make_model("gpt-4o", "llm", "openai"),
+            _make_model("bge-large", "embedding", "local-hf"),
+        ]
+        client = MagicMock()
+        client.models.list.return_value = SimpleNamespace(data=models)
+        client.chat.completions.create.return_value = _make_completion_response("4")
+        client.embeddings.create.return_value = _make_embedding_response(768)
+
+        cli.cmd_check(client, _args(
+            command="check", model_id=None, type="all",
+            prompt="What is 2+2?", input="Test text.",
+        ))
+
+        out = capsys.readouterr().out
+        assert "gpt-4o" in out
+        assert "bge-large" in out
+        assert "PASS" in out
+        assert "2 passed" in out
+        assert "2 total" in out
+
+    def test_mixed_results(self, capsys: pytest.CaptureFixture[str]):
+        models = [
+            _make_model("gpt-4o", "llm", "openai"),
+            _make_model("bad-embed", "embedding", "broken"),
+            _make_model("reranker-v1", "rerank", "local"),
+        ]
+        client = MagicMock()
+        client.models.list.return_value = SimpleNamespace(data=models)
+        client.chat.completions.create.return_value = _make_completion_response("4")
+        client.embeddings.create.side_effect = RuntimeError("Model offline")
+
+        cli.cmd_check(client, _args(
+            command="check", model_id=None, type="all",
+            prompt="test", input="test",
+        ))
+
+        out = capsys.readouterr().out
+        assert "PASS" in out
+        assert "FAIL" in out
+        assert "SKIPPED" in out
+        assert "1 passed" in out
+        assert "1 failed" in out
+        assert "1 skipped" in out
+        assert "3 total" in out
+
+    def test_filter_by_type_llm(self, capsys: pytest.CaptureFixture[str]):
+        models = [
+            _make_model("gpt-4o", "llm", "openai"),
+            _make_model("bge-large", "embedding", "local-hf"),
+        ]
+        client = MagicMock()
+        client.models.list.return_value = SimpleNamespace(data=models)
+        client.chat.completions.create.return_value = _make_completion_response("4")
+
+        cli.cmd_check(client, _args(
+            command="check", model_id=None, type="llm",
+            prompt="test", input="test",
+        ))
+
+        out = capsys.readouterr().out
+        assert "gpt-4o" in out
+        assert "bge-large" not in out
+        assert "1 total" in out
+
+    def test_filter_by_type_embedding(self, capsys: pytest.CaptureFixture[str]):
+        models = [
+            _make_model("gpt-4o", "llm", "openai"),
+            _make_model("bge-large", "embedding", "local-hf"),
+        ]
+        client = MagicMock()
+        client.models.list.return_value = SimpleNamespace(data=models)
+        client.embeddings.create.return_value = _make_embedding_response(768)
+
+        cli.cmd_check(client, _args(
+            command="check", model_id=None, type="embedding",
+            prompt="test", input="test",
+        ))
+
+        out = capsys.readouterr().out
+        assert "bge-large" in out
+        assert "gpt-4o" not in out
+
+    def test_no_models(self, capsys: pytest.CaptureFixture[str]):
+        client = MagicMock()
+        client.models.list.return_value = SimpleNamespace(data=[])
+
+        cli.cmd_check(client, _args(
+            command="check", model_id=None, type="all",
+            prompt="test", input="test",
+        ))
+
+        out = capsys.readouterr().out
+        assert "No models found." in out
+
+    def test_json_output(self, capsys: pytest.CaptureFixture[str]):
+        models = [
+            _make_model("gpt-4o", "llm", "openai"),
+            _make_model("bge-large", "embedding", "local-hf"),
+        ]
+        client = MagicMock()
+        client.models.list.return_value = SimpleNamespace(data=models)
+        client.chat.completions.create.return_value = _make_completion_response("4")
+        client.embeddings.create.return_value = _make_embedding_response(1536)
+
+        cli.cmd_check(client, _args(
+            command="check", model_id=None, type="all",
+            prompt="What is 2+2?", input="Test.", json=True,
+        ))
+
+        data = json.loads(capsys.readouterr().out)
+        assert data["total"] == 2
+        assert data["results"][0]["model_id"] == "bge-large"
+        assert data["results"][0]["status"] == "pass"
+        assert data["results"][0]["dimensions"] == 1536
+        assert data["results"][1]["model_id"] == "gpt-4o"
+        assert data["results"][1]["status"] == "pass"
+        assert data["results"][1]["response"] == "4"
+
+    def test_json_output_with_failure(self, capsys: pytest.CaptureFixture[str]):
+        models = [_make_model("bad-model", "llm", "broken")]
+        client = MagicMock()
+        client.models.list.return_value = SimpleNamespace(data=models)
+        client.chat.completions.create.side_effect = RuntimeError("Timeout")
+
+        cli.cmd_check(client, _args(
+            command="check", model_id=None, type="all",
+            prompt="test", input="test", json=True,
+        ))
+
+        data = json.loads(capsys.readouterr().out)
+        assert data["total"] == 1
+        assert data["results"][0]["status"] == "fail"
+        assert "Timeout" in data["results"][0]["error"]
+
+    def test_models_fallback_attribute(self, capsys: pytest.CaptureFixture[str]):
+        """Ensure all-models mode handles the alternate 'models' attribute."""
+        models = [_make_model("gpt-4o", "llm", "openai")]
+        client = MagicMock()
+        resp = MagicMock(spec=[])
+        resp.models = models
+        client.models.list.return_value = resp
+        client.chat.completions.create.return_value = _make_completion_response("4")
+
+        cli.cmd_check(client, _args(
+            command="check", model_id=None, type="all",
+            prompt="test", input="test",
+        ))
+
+        out = capsys.readouterr().out
+        assert "gpt-4o" in out
+        assert "PASS" in out
+
+
+# ---------------------------------------------------------------------------
 # Parser tests
 # ---------------------------------------------------------------------------
 
@@ -731,6 +892,22 @@ class TestParser:
     def test_check_default_prompt(self):
         args = cli._build_parser().parse_args(["check", "my-model"])
         assert "2+2" in args.prompt
+
+    def test_check_no_model_id(self):
+        args = cli._build_parser().parse_args(["check"])
+        assert args.command == "check"
+        assert args.model_id is None
+        assert args.type == "all"
+
+    def test_check_type_filter(self):
+        args = cli._build_parser().parse_args(["check", "--type", "llm"])
+        assert args.model_id is None
+        assert args.type == "llm"
+
+    def test_check_model_id_with_type_filter(self):
+        args = cli._build_parser().parse_args(["check", "my-model", "--type", "llm"])
+        assert args.model_id == "my-model"
+        assert args.type == "llm"
 
     def test_models_metadata_flag(self):
         args = cli._build_parser().parse_args(["models", "--metadata"])

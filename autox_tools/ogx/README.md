@@ -65,13 +65,20 @@ uv run ogx --json health              # JSON output
 ### `check` -- Model sanity check
 
 ```bash
-uv run ogx check <model-id>                          # default prompt/input
+uv run ogx check                                     # check all models
+uv run ogx check --type llm                          # check all LLM models only
+uv run ogx check --type embedding                    # check all embedding models only
+uv run ogx check <model-id>                          # check a single model
 uv run ogx check <model-id> --prompt "Say hello."    # custom LLM prompt
 uv run ogx check <model-id> --input "Custom text."   # custom embedding input
-uv run ogx --json check <model-id>                   # JSON output
+uv run ogx --json check                              # JSON output (all models)
 ```
 
-Sends a simple request to the model and reports pass/fail:
+When called without a `model-id`, iterates over all registered models and
+prints a summary table with per-model pass/fail status. Use `--type` to
+narrow the sweep to a single model type.
+
+When called with a `model-id`, sends a single request and reports the result:
 
 - **LLM models**: sends a chat completion request and checks for a non-empty response.
 - **Embedding models**: sends an embedding request and reports the output dimensions.

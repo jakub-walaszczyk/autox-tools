@@ -7,7 +7,7 @@ Usage::
     uv run ogx providers [--json]
     uv run ogx stores [--json]
     uv run ogx health [--json]
-    uv run ogx check <model-id> [--prompt TEXT] [--input TEXT] [--json]
+    uv run ogx check [model-id] [--type {all,llm,embedding,rerank}] [--prompt TEXT] [--input TEXT] [--json]
 """
 
 from __future__ import annotations
@@ -351,127 +351,176 @@ def cmd_health(client: OgxClient, args: argparse.Namespace) -> None:
     print(f"Version : {version}")
 
 
-def cmd_check(client: OgxClient, args: argparse.Namespace) -> None:
-    """Run a sanity check against a model."""
-    model_id: str = args.model_id
-
-    try:
-        model = client.models.retrieve(model_id)
-    except Exception as exc:
-        sys.exit(f"Model '{model_id}' not found: {exc}")
-
-    mtype = _model_type(model)
-    provider = getattr(model, "provider_id", None) or "—"
-
+def _run_check(
+    client: OgxClient, model_id: str, mtype: str, provider: str,
+    prompt: str, input_text: str,
+) -> dict[str, object]:
+    """Execute a sanity check for a single model and return the result dict."""
+    result: dict[str, object] = {
+        "model_id": model_id,
+        "model_type": mtype,
+        "provider_id": provider,
+    }
     if mtype == "llm":
-        _check_llm(client, args, model_id, mtype, provider)
+        result["prompt"] = prompt
+        try:
+            completion = client.chat.completions.create(
+                model=model_id,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            result["status"] = "pass"
+            result["response"] = completion.choices[0].message.content or ""
+        except Exception as exc:
+            result["status"] = "fail"
+            result["error"] = str(exc)
     elif mtype == "embedding":
-        _check_embedding(client, args, model_id, mtype, provider)
+        result["input"] = input_text
+        try:
+            response = client.embeddings.create(model=model_id, input=input_text)
+            embedding = response.data[0].embedding
+            result["status"] = "pass"
+            result["dimensions"] = len(embedding) if isinstance(embedding, list) else 0
+        except Exception as exc:
+            result["status"] = "fail"
+            result["error"] = str(exc)
     elif mtype == "rerank":
-        if args.json:
-            _print_json({
-                "model_id": model_id,
-                "model_type": mtype,
-                "provider_id": provider,
-                "status": "skipped",
-                "message": "Sanity check is not supported for rerank models.",
-            })
-        else:
-            print(f"Model    : {model_id}")
-            print(f"Type     : {mtype}")
-            print(f"Provider : {provider}")
-            print("Status   : SKIPPED")
-            print("Message  : Sanity check is not supported for rerank models.")
+        result["status"] = "skipped"
+        result["message"] = "Sanity check is not supported for rerank models."
     else:
-        sys.exit(f"Unknown model type '{mtype}' for model '{model_id}'. Cannot run sanity check.")
+        result["status"] = "error"
+        result["message"] = f"Unknown model type '{mtype}'."
+    return result
 
 
-def _check_llm(
-    client: OgxClient, args: argparse.Namespace, model_id: str, mtype: str, provider: str,
-) -> None:
-    """Send a chat completion request and report pass/fail."""
-    prompt: str = args.prompt
-    status = "pass"
-    response_text = ""
-    error = ""
+def _print_check_result(result: dict[str, object]) -> None:
+    """Print a single check result in human-readable form."""
+    mtype = result["model_type"]
+    status = str(result["status"]).upper()
 
-    try:
-        completion = client.chat.completions.create(
-            model=model_id,
-            messages=[{"role": "user", "content": prompt}],
+    if mtype == "embedding":
+        print(f"Model      : {result['model_id']}")
+        print(f"Type       : {mtype}")
+        print(f"Provider   : {result['provider_id']}")
+        print(f"Input      : {result.get('input', '')}")
+        print(f"Status     : {status}")
+        if result["status"] == "pass":
+            print(f"Dimensions : {result.get('dimensions', 0)}")
+        elif result["status"] == "fail":
+            print(f"Error      : {result.get('error', '')}")
+        else:
+            print(f"Message    : {result.get('message', '')}")
+    else:
+        print(f"Model    : {result['model_id']}")
+        print(f"Type     : {mtype}")
+        print(f"Provider : {result['provider_id']}")
+        if mtype == "llm":
+            print(f"Prompt   : {result.get('prompt', '')}")
+        print(f"Status   : {status}")
+        if result["status"] == "pass":
+            print(f"Response : {result.get('response', '')}")
+        elif result["status"] == "fail":
+            print(f"Error    : {result.get('error', '')}")
+        else:
+            print(f"Message  : {result.get('message', '')}")
+
+
+def _print_check_summary(results: list[dict[str, object]]) -> None:
+    """Print a summary table for multiple check results."""
+    if not results:
+        print("No models found.")
+        return
+
+    max_id = max(len("Model ID"), max(len(str(r["model_id"])) for r in results))
+    max_type = max(len("Type"), max(len(str(r["model_type"])) for r in results))
+    max_prov = max(len("Provider"), max(len(str(r["provider_id"])) for r in results))
+
+    header = f"  {'Model ID':<{max_id}}   {'Type':<{max_type}}   {'Provider':<{max_prov}}   {'Status':<7}   Detail"
+    print(header)
+    print(f"  {'─' * max_id}   {'─' * max_type}   {'─' * max_prov}   {'─' * 7}   {'─' * 30}")
+
+    for r in results:
+        status = str(r["status"]).upper()
+        detail = ""
+        if r["status"] == "pass":
+            if r["model_type"] == "embedding":
+                detail = f"dimensions={r.get('dimensions', 0)}"
+            else:
+                resp = str(r.get("response", ""))
+                detail = resp[:50] + ("…" if len(resp) > 50 else "")
+        elif r["status"] == "fail":
+            err = str(r.get("error", ""))
+            detail = err[:50] + ("…" if len(err) > 50 else "")
+        elif r["status"] == "skipped":
+            detail = str(r.get("message", ""))
+
+        print(
+            f"  {str(r['model_id']):<{max_id}}   {str(r['model_type']):<{max_type}}"
+            f"   {str(r['provider_id']):<{max_prov}}   {status:<7}   {detail}"
         )
-        response_text = completion.choices[0].message.content or ""
-    except Exception as exc:
-        status = "fail"
-        error = str(exc)
 
-    if args.json:
-        result: dict[str, object] = {
-            "model_id": model_id,
-            "model_type": mtype,
-            "provider_id": provider,
-            "status": status,
-            "prompt": prompt,
-        }
-        if status == "pass":
-            result["response"] = response_text
-        else:
-            result["error"] = error
-        _print_json(result)
-        return
+    passed = sum(1 for r in results if r["status"] == "pass")
+    failed = sum(1 for r in results if r["status"] == "fail")
+    skipped = sum(1 for r in results if r["status"] == "skipped")
+    errored = sum(1 for r in results if r["status"] == "error")
 
-    print(f"Model    : {model_id}")
-    print(f"Type     : {mtype}")
-    print(f"Provider : {provider}")
-    print(f"Prompt   : {prompt}")
-    print(f"Status   : {'PASS' if status == 'pass' else 'FAIL'}")
-    if status == "pass":
-        print(f"Response : {response_text}")
-    else:
-        print(f"Error    : {error}")
+    parts = []
+    if passed:
+        parts.append(f"{passed} passed")
+    if failed:
+        parts.append(f"{failed} failed")
+    if skipped:
+        parts.append(f"{skipped} skipped")
+    if errored:
+        parts.append(f"{errored} error")
+    print(f"\n  {', '.join(parts)} ({len(results)} total)")
 
 
-def _check_embedding(
-    client: OgxClient, args: argparse.Namespace, model_id: str, mtype: str, provider: str,
-) -> None:
-    """Send an embedding request and report pass/fail."""
+def cmd_check(client: OgxClient, args: argparse.Namespace) -> None:
+    """Run a sanity check against one or all models."""
+    model_id: str | None = getattr(args, "model_id", None)
+    prompt: str = args.prompt
     input_text: str = args.input
-    status = "pass"
-    dimensions = 0
-    error = ""
 
-    try:
-        response = client.embeddings.create(model=model_id, input=input_text)
-        embedding = response.data[0].embedding
-        dimensions = len(embedding) if isinstance(embedding, list) else 0
-    except Exception as exc:
-        status = "fail"
-        error = str(exc)
+    if model_id is not None:
+        try:
+            model = client.models.retrieve(model_id)
+        except Exception as exc:
+            sys.exit(f"Model '{model_id}' not found: {exc}")
 
-    if args.json:
-        result: dict[str, object] = {
-            "model_id": model_id,
-            "model_type": mtype,
-            "provider_id": provider,
-            "status": status,
-            "input": input_text,
-        }
-        if status == "pass":
-            result["dimensions"] = dimensions
+        mtype = _model_type(model)
+        provider = getattr(model, "provider_id", None) or "—"
+
+        if mtype not in ("llm", "embedding", "rerank"):
+            sys.exit(f"Unknown model type '{mtype}' for model '{model_id}'. Cannot run sanity check.")
+
+        result = _run_check(client, model_id, mtype, provider, prompt, input_text)
+        if args.json:
+            _print_json(result)
         else:
-            result["error"] = error
-        _print_json(result)
+            _print_check_result(result)
         return
 
-    print(f"Model      : {model_id}")
-    print(f"Type       : {mtype}")
-    print(f"Provider   : {provider}")
-    print(f"Input      : {input_text}")
-    print(f"Status     : {'PASS' if status == 'pass' else 'FAIL'}")
-    if status == "pass":
-        print(f"Dimensions : {dimensions}")
+    # All-models mode
+    response = client.models.list()
+    raw_data = getattr(response, "data", None)
+    if raw_data is None:
+        raw_data = getattr(response, "models", [])
+    models = sorted(raw_data, key=lambda m: m.id)
+
+    type_filter: str = getattr(args, "type", "all")
+    if type_filter != "all":
+        models = [m for m in models if _model_type(m) == type_filter]
+
+    results: list[dict[str, object]] = []
+    for m in models:
+        mtype = _model_type(m)
+        provider = getattr(m, "provider_id", None) or "—"
+        results.append(_run_check(client, m.id, mtype, provider, prompt, input_text))
+
+    if args.json:
+        _print_json({"total": len(results), "results": results})
     else:
-        print(f"Error      : {error}")
+        _print_check_summary(results)
 
 
 # ---------------------------------------------------------------------------
@@ -515,8 +564,14 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("health", help="Check OGX gateway health and version")
 
     # check
-    p = sub.add_parser("check", help="Run a sanity check against a model")
-    p.add_argument("model_id", help="Model ID to test")
+    p = sub.add_parser("check", help="Run a sanity check against one or all models")
+    p.add_argument("model_id", nargs="?", default=None, help="Model ID to test (omit to check all)")
+    p.add_argument(
+        "--type", "-t",
+        choices=["all", "llm", "embedding", "rerank"],
+        default="all",
+        help="Filter by model type when checking all models (default: all)",
+    )
     p.add_argument(
         "--prompt", "-p",
         default="What is 2+2? Reply with just the number.",
