@@ -190,10 +190,10 @@ Handles CrashLoopBackOff pods by also fetching previous container logs.
 
 ### `artifacts` -- Browse and download S3 artifacts
 
-Browse output artifacts from a pipeline run stored in S3/MinIO. Default mode shows a category summary with RAG pattern discovery; use `--pattern` to drill into specific patterns.
+Browse output artifacts from a pipeline run stored in S3/MinIO. Default mode shows a category-based summary; use `--component` to drill into specific pipeline components.
 
 ```bash
-# Summary view (category counts + pattern names)
+# Summary view (category counts)
 uv run pipelines artifacts <run-id>
 uv run pipelines --json artifacts <run-id>
 
@@ -204,21 +204,9 @@ uv run pipelines artifacts <run-id> --download ./results/
 uv run pipelines artifacts <run-id> --component all                    # List all components
 uv run pipelines artifacts <run-id> --component search-space-optimization  # Files in component
 uv run pipelines artifacts <run-id> --component search-space-optimization --download ./out/
-
-# Browse RAG patterns
-uv run pipelines artifacts <run-id> --pattern all              # List all patterns
-uv run pipelines artifacts <run-id> --pattern Pattern1         # Files in Pattern1
-uv run pipelines artifacts <run-id> --pattern Pattern1 --download ./out/  # Download pattern
-
-# Single artifact from a pattern
-uv run pipelines artifacts <run-id> --pattern Pattern1 --artifact evaluation_results.json
-
-# Print artifact content to stdout (pipe-friendly)
-uv run pipelines artifacts <run-id> --pattern Pattern1 --artifact evaluation_results.json --print
-uv run pipelines artifacts <run-id> --pattern Pattern1 --artifact evaluation_results.json --print | jq .
 ```
 
-Pattern name matching is case-insensitive and supports substring matching (e.g. `--pattern optim` matches `OptimizedChunking`). When `--artifact` is used without `--download`, the file is saved to the current directory.
+For AutoRAG-specific artifact browsing (RAG pattern discovery, per-pattern downloads, artifact content printing), use the [`autorag artifacts`](../autorag/README.md) command instead.
 
 Requires artifacts S3 credentials (`ARTIFACTS_AWS_S3_ENDPOINT`, `ARTIFACTS_AWS_ACCESS_KEY_ID`, `ARTIFACTS_AWS_SECRET_ACCESS_KEY`). Without them, only artifact references are shown. These are separate from the `AWS_*` credentials used by the `s3` tool for data storage.
 
@@ -261,22 +249,6 @@ uv run pipelines logs abc-123-def-456
 uv run pipelines artifacts abc-123-def-456 --download ./failed-run/
 ```
 
-### Browse RAG pattern results
-
-```bash
-# See artifact summary and discover pattern names
-uv run pipelines artifacts abc-123-def-456
-
-# List all patterns with file counts
-uv run pipelines artifacts abc-123-def-456 --pattern all
-
-# Download a single evaluation result
-uv run pipelines artifacts abc-123-def-456 --pattern Pattern1 --artifact evaluation_results.json
-
-# Download an entire pattern's artifacts
-uv run pipelines artifacts abc-123-def-456 --pattern Pattern1 --download ./pattern-results/
-```
-
 ### Submit and monitor an AutoRAG experiment
 
 ```bash
@@ -289,7 +261,7 @@ uv run pipelines run autorag-config.json --override optimization_metric=answer_c
 # Or submit, then inspect results later
 uv run pipelines run autorag-config.json
 uv run pipelines status <run-id>
-uv run experiments results <run-id>
+uv run autorag results <run-id>
 ```
 
 ### Submit an AutoML training run

@@ -27,7 +27,8 @@ uv run milvus --help
 | Entry point | Package | Description |
 |---|---|---|
 | `pipelines` | [`autox_tools/pipelines/`](autox_tools/pipelines/README.md) | Submit, monitor, and inspect Kubeflow Pipeline runs -- run submission, status, live progress, pod logs, and S3 artifacts |
-| `experiments` | [`autox_tools/experiments/`](autox_tools/experiments/README.md) | Analyze and compare experiment results -- leaderboard ranking, side-by-side comparison, PDF reports, and artifact export |
+| `autorag` | [`autox_tools/autorag/`](autox_tools/autorag/README.md) | Analyze AutoRAG experiment results -- leaderboard ranking, side-by-side comparison, PDF reports, RAG pattern browsing, and artifact export |
+| `automl` | [`autox_tools/automl/`](autox_tools/automl/README.md) | AutoML experiment management -- placeholder for future result analysis tooling |
 | `s3` | [`autox_tools/s3/`](autox_tools/s3/README.md) | Browse, download, upload, and clean up S3/MinIO experiment artifacts |
 | `milvus` | [`autox_tools/milvus/`](autox_tools/milvus/README.md) | Manage remote Milvus vector database instances -- list, inspect, query, export, and maintain collections |
 | `ogx` | [`autox_tools/ogx/`](autox_tools/ogx/README.md) | Inspect and test models, providers, and vector stores on an OGX gateway |
@@ -42,10 +43,10 @@ Submit an AutoRAG or AutoML experiment, monitor it, and inspect results -- all f
 uv run pipelines run autorag-config.json --watch
 
 # 2. Once complete, view evaluation metrics
-uv run experiments results <run-id>
+uv run autorag results <run-id>
 
 # 3. Compare against a previous run
-uv run experiments compare <run-id-1> <run-id-2>
+uv run autorag compare <run-id-1> <run-id-2>
 
 # 4. Download artifacts for offline analysis
 uv run pipelines artifacts <run-id> --download ./results/
@@ -88,13 +89,17 @@ uv run pytest
 autox-tools/
   autox_tools/
     __init__.py
-    experiments/       # Experiment result analysis tool
+    autorag/           # AutoRAG experiment analysis tool
       __init__.py
       _artifacts.py    #   Artifact download and categorization
       _display.py      #   Table formatting and terminal output
       _patterns.py     #   RAG pattern discovery and parsing
       _report.py       #   PDF report generation (requires matplotlib)
       _resolver.py     #   S3 artifact path resolution from KFP run metadata
+      cli.py           #   argparse entry point and subcommands
+      README.md        #   Command reference and setup guide
+    automl/            # AutoML experiment management tool (placeholder)
+      __init__.py
       cli.py           #   argparse entry point and subcommands
       README.md        #   Command reference and setup guide
     milvus/            # Milvus CLI tool

@@ -16,8 +16,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from datetime import datetime
 
-from autox_tools.experiments._artifacts import extract_metrics
-from autox_tools.experiments._resolver import ArtifactLocation, resolve
+from autox_tools.autorag._artifacts import extract_metrics
+from autox_tools.autorag._resolver import ArtifactLocation, resolve
 from autox_tools.pipelines.cli import _get_pipeline_name, _get_run_state
 from autox_tools.s3.cli import _paginate_objects
 
@@ -73,7 +73,7 @@ def natural_sort_key(name: str) -> list[int | str]:
 
 
 # ---------------------------------------------------------------------------
-# Pattern discovery (adapted from pipelines/cli.py:725-761)
+# Pattern discovery
 # ---------------------------------------------------------------------------
 
 
@@ -216,7 +216,7 @@ def detect_primary_metric(
     3. Well-known metric names (answer_correctness, accuracy, …).
     4. First non-excluded metric alphabetically.
     """
-    from autox_tools.experiments._display import _is_excluded_metric
+    from autox_tools.autorag._display import _is_excluded_metric
 
     pool = set(summary_metrics)
     if patterns:

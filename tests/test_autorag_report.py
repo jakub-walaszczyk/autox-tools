@@ -10,13 +10,13 @@ import tempfile
 
 import pytest
 
-from autox_tools.experiments._patterns import (
+from autox_tools.autorag._patterns import (
     PatternMetrics,
     RunPatternData,
 )
 
 try:
-    from autox_tools.experiments._report import HAS_MATPLOTLIB
+    from autox_tools.autorag._report import HAS_MATPLOTLIB
 except ImportError:
     HAS_MATPLOTLIB = False
 
@@ -82,7 +82,7 @@ def _sample_run_data(
 
 class TestGenerateResultsPdf:
     def test_creates_file(self):
-        from autox_tools.experiments._report import generate_results_pdf
+        from autox_tools.autorag._report import generate_results_pdf
 
         data = _sample_run_data()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -92,7 +92,7 @@ class TestGenerateResultsPdf:
             assert os.path.getsize(path) > 0
 
     def test_with_display_names(self):
-        from autox_tools.experiments._report import generate_results_pdf
+        from autox_tools.autorag._report import generate_results_pdf
 
         data = _sample_run_data()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -101,7 +101,7 @@ class TestGenerateResultsPdf:
             assert os.path.isfile(path)
 
     def test_no_patterns(self):
-        from autox_tools.experiments._report import generate_results_pdf
+        from autox_tools.autorag._report import generate_results_pdf
 
         data = _sample_run_data(n_patterns=0)
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -110,7 +110,7 @@ class TestGenerateResultsPdf:
             assert os.path.isfile(path)
 
     def test_no_ci_data(self):
-        from autox_tools.experiments._report import generate_results_pdf
+        from autox_tools.autorag._report import generate_results_pdf
 
         data = _sample_run_data(include_ci=False)
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -122,7 +122,7 @@ class TestGenerateResultsPdf:
 
 class TestGenerateComparePdf:
     def test_creates_file(self):
-        from autox_tools.experiments._report import generate_compare_pdf
+        from autox_tools.autorag._report import generate_compare_pdf
 
         data1 = _sample_run_data(run_id="run-1", display_name="Baseline")
         data2 = _sample_run_data(run_id="run-2", display_name="New Config")
@@ -133,7 +133,7 @@ class TestGenerateComparePdf:
             assert os.path.getsize(path) > 0
 
     def test_with_display_names(self):
-        from autox_tools.experiments._report import generate_compare_pdf
+        from autox_tools.autorag._report import generate_compare_pdf
 
         data1 = _sample_run_data(run_id="r1")
         data2 = _sample_run_data(run_id="r2")
@@ -144,7 +144,7 @@ class TestGenerateComparePdf:
             assert os.path.isfile(path)
 
     def test_different_pattern_counts(self):
-        from autox_tools.experiments._report import generate_compare_pdf
+        from autox_tools.autorag._report import generate_compare_pdf
 
         data1 = _sample_run_data(run_id="r1", n_patterns=3)
         data2 = _sample_run_data(run_id="r2", n_patterns=7)
@@ -156,7 +156,7 @@ class TestGenerateComparePdf:
 
 class TestExtractCiBounds:
     def test_extracts_valid_ci(self):
-        from autox_tools.experiments._report import _extract_ci_bounds
+        from autox_tools.autorag._report import _extract_ci_bounds
 
         p = PatternMetrics(
             name="test",
@@ -166,13 +166,13 @@ class TestExtractCiBounds:
         assert _extract_ci_bounds(p, "m") == (0.7, 0.9)
 
     def test_missing_scores(self):
-        from autox_tools.experiments._report import _extract_ci_bounds
+        from autox_tools.autorag._report import _extract_ci_bounds
 
         p = PatternMetrics(name="test", metrics={"m": 0.8}, raw_data={})
         assert _extract_ci_bounds(p, "m") == (None, None)
 
     def test_missing_metric_in_scores(self):
-        from autox_tools.experiments._report import _extract_ci_bounds
+        from autox_tools.autorag._report import _extract_ci_bounds
 
         p = PatternMetrics(
             name="test",
@@ -182,7 +182,7 @@ class TestExtractCiBounds:
         assert _extract_ci_bounds(p, "m") == (None, None)
 
     def test_partial_ci_returns_none(self):
-        from autox_tools.experiments._report import _extract_ci_bounds
+        from autox_tools.autorag._report import _extract_ci_bounds
 
         p = PatternMetrics(
             name="test",
@@ -194,5 +194,5 @@ class TestExtractCiBounds:
 
 class TestRequireMatplotlib:
     def test_does_not_raise_when_available(self):
-        from autox_tools.experiments._report import require_matplotlib
+        from autox_tools.autorag._report import require_matplotlib
         require_matplotlib()

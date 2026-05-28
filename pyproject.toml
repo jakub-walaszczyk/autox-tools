@@ -20,7 +20,8 @@ reports = ["matplotlib>=3.8"]
 milvus = "autox_tools.milvus.cli:main"
 pipelines = "autox_tools.pipelines.cli:main"
 s3 = "autox_tools.s3.cli:main"
-experiments = "autox_tools.experiments.cli:main"
+autorag = "autox_tools.autorag.cli:main"
+automl = "autox_tools.automl.cli:main"
 ogx = "autox_tools.ogx.cli:main"
 secrets = "autox_tools.secrets.cli:main"
 

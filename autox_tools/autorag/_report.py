@@ -12,8 +12,8 @@ from __future__ import annotations
 import sys
 from typing import Any
 
-from autox_tools.experiments._display import format_duration, is_lower_better
-from autox_tools.experiments._patterns import PatternMetrics, RunPatternData, natural_sort_key
+from autox_tools.autorag._display import format_duration, is_lower_better
+from autox_tools.autorag._patterns import PatternMetrics, RunPatternData, natural_sort_key
 
 try:
     import matplotlib as mpl
@@ -500,14 +500,12 @@ def _render_comparison_charts(
     label2: str,
 ) -> None:
     """Render comparison charts: convergence + one page per metric pair."""
-    from typing import Callable
-
     shared_metrics = sorted(
         {m for p in data1.patterns for m in p.metrics}
         & {m for p in data2.patterns for m in p.metrics},
     )
 
-    plots: list[Callable[[Any], None]] = []
+    plots: list[Any] = []
     plots.append(
         lambda ax: _plot_comparison_convergence(ax, data1, data2, label1, label2)
     )

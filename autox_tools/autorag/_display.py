@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from datetime import datetime
 
-    from autox_tools.experiments._patterns import PatternMetrics
+    from autox_tools.autorag._patterns import PatternMetrics
 
 MAX_WIDTH = 100
 SEPARATOR = "=" * MAX_WIDTH

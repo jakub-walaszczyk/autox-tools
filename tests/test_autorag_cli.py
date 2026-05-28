@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from autox_tools.experiments import _artifacts, _display, _patterns, _resolver, cli
+from autox_tools.autorag import _artifacts, _display, _patterns, _resolver, cli
 
 # ---------------------------------------------------------------------------
 # _artifacts.py tests
@@ -127,7 +127,7 @@ class TestListAndCategorize:
             {"Key": "pfx/", "Size": 0, "LastModified": "2026-01-01"},
         ]
         s3 = MagicMock()
-        with patch("autox_tools.experiments._artifacts._paginate_objects",
+        with patch("autox_tools.autorag._artifacts._paginate_objects",
                     return_value={"Contents": objects}):
             result = _artifacts.list_and_categorize(s3, "bucket", "pfx/")
 
@@ -138,7 +138,7 @@ class TestListAndCategorize:
 
     def test_empty_listing(self):
         s3 = MagicMock()
-        with patch("autox_tools.experiments._artifacts._paginate_objects",
+        with patch("autox_tools.autorag._artifacts._paginate_objects",
                     return_value={"Contents": []}):
             result = _artifacts.list_and_categorize(s3, "bucket", "pfx/")
         assert result == []
@@ -147,7 +147,7 @@ class TestListAndCategorize:
         dt = datetime(2026, 5, 15, 14, 30, tzinfo=UTC)
         objects = [{"Key": "pfx/file.txt", "Size": 100, "LastModified": dt}]
         s3 = MagicMock()
-        with patch("autox_tools.experiments._artifacts._paginate_objects",
+        with patch("autox_tools.autorag._artifacts._paginate_objects",
                     return_value={"Contents": objects}):
             result = _artifacts.list_and_categorize(s3, "bucket", "pfx/")
         assert "2026" in result[0].last_modified
@@ -290,7 +290,7 @@ class TestFormatLeaderboard:
         ]
         result = _display.format_leaderboard(patterns, "accuracy", ["accuracy", "f1"])
         lines = result.splitlines()
-        pattern_lines = [l for l in lines if "P" in l and "0." in l]
+        pattern_lines = [ln for ln in lines if "P" in ln and "0." in ln]
         assert "P2" in pattern_lines[0]
         assert "P1" in pattern_lines[1]
         assert "P3" in pattern_lines[2]
@@ -306,7 +306,7 @@ class TestFormatLeaderboard:
         ]
         result = _display.format_leaderboard(patterns, "latency", ["latency"])
         lines = result.splitlines()
-        pattern_lines = [l for l in lines if "P" in l and ("100" in l or "50" in l)]
+        pattern_lines = [ln for ln in lines if "P" in ln and ("100" in ln or "50" in ln)]
         assert "P2" in pattern_lines[0]
 
 
@@ -362,7 +362,7 @@ class TestFormatSummaryMetrics:
     def test_primary_metric_first(self):
         metrics = {"zebra": 0.1, "answer_correctness": 0.85, "alpha": 0.5}
         result = _display.format_summary_metrics(metrics, primary_metric="answer_correctness")
-        lines = [l.strip() for l in result.splitlines() if "0." in l]
+        lines = [ln.strip() for ln in result.splitlines() if "0." in ln]
         assert "answer_correctness" in lines[0]
         assert "alpha" in lines[1]
         assert "zebra" in lines[2]
@@ -370,7 +370,7 @@ class TestFormatSummaryMetrics:
     def test_without_primary_metric_alphabetical(self):
         metrics = {"zebra": 0.1, "alpha": 0.5}
         result = _display.format_summary_metrics(metrics)
-        lines = [l.strip() for l in result.splitlines() if "0." in l]
+        lines = [ln.strip() for ln in result.splitlines() if "0." in ln]
         assert "alpha" in lines[0]
         assert "zebra" in lines[1]
 
@@ -701,14 +701,14 @@ class TestPatternDiscovery:
         objects = [
             {"Key": "pfx/comp/task-id/rag_patterns/P1/pattern.json", "Size": 100},
         ]
-        with patch("autox_tools.experiments._patterns._paginate_objects",
+        with patch("autox_tools.autorag._patterns._paginate_objects",
                     return_value={"Contents": objects}):
             result = _patterns.find_rag_patterns_prefix(s3, "bucket", "pfx/")
         assert result == "pfx/comp/task-id/rag_patterns/"
 
     def test_find_rag_patterns_prefix_not_found(self):
         s3 = MagicMock()
-        with patch("autox_tools.experiments._patterns._paginate_objects",
+        with patch("autox_tools.autorag._patterns._paginate_objects",
                     return_value={"Contents": []}):
             result = _patterns.find_rag_patterns_prefix(s3, "bucket", "pfx/")
         assert result is None
@@ -720,7 +720,7 @@ class TestPatternDiscovery:
             {"Prefix": "rag/Pattern2/"},
             {"Prefix": "rag/Pattern1/"},
         ]
-        with patch("autox_tools.experiments._patterns._paginate_objects",
+        with patch("autox_tools.autorag._patterns._paginate_objects",
                     return_value={"CommonPrefixes": common_prefixes}):
             result = _patterns.discover_patterns(s3, "bucket", "rag/")
         assert result == ["Pattern1", "Pattern2", "Pattern11"]
@@ -832,9 +832,9 @@ class TestFetchPatternMetrics:
 
         s3.get_object.side_effect = mock_get
 
-        with patch("autox_tools.experiments._patterns.find_rag_patterns_prefix",
+        with patch("autox_tools.autorag._patterns.find_rag_patterns_prefix",
                     return_value="pfx/rag_patterns/"), \
-             patch("autox_tools.experiments._patterns.discover_patterns",
+             patch("autox_tools.autorag._patterns.discover_patterns",
                     return_value=["P1", "P2"]):
             result = _patterns.fetch_all_pattern_metrics(s3, "bucket", "pfx/")
 
@@ -844,7 +844,7 @@ class TestFetchPatternMetrics:
 
     def test_fetch_all_no_rag_prefix(self):
         s3 = MagicMock()
-        with patch("autox_tools.experiments._patterns.find_rag_patterns_prefix",
+        with patch("autox_tools.autorag._patterns.find_rag_patterns_prefix",
                     return_value=None):
             result = _patterns.fetch_all_pattern_metrics(s3, "bucket", "pfx/")
         assert result == []
@@ -917,10 +917,10 @@ class TestCollectRunData:
             _patterns.PatternMetrics("P2", {"answer_correctness": 0.9}, {}),
         ]
 
-        with patch("autox_tools.experiments._patterns.resolve", return_value=location), \
-             patch("autox_tools.experiments._patterns._find_summary_results",
+        with patch("autox_tools.autorag._patterns.resolve", return_value=location), \
+             patch("autox_tools.autorag._patterns._find_summary_results",
                    return_value=(summary, "pfx/evaluation_results.json")), \
-             patch("autox_tools.experiments._patterns.fetch_all_pattern_metrics",
+             patch("autox_tools.autorag._patterns.fetch_all_pattern_metrics",
                    return_value=patterns):
             result = _patterns.collect_run_data(kfp, s3, "run-1")
 
@@ -933,14 +933,14 @@ class TestCollectRunData:
     def test_returns_none_on_no_location(self):
         kfp = MagicMock()
         s3 = MagicMock()
-        with patch("autox_tools.experiments._patterns.resolve", return_value=None):
+        with patch("autox_tools.autorag._patterns.resolve", return_value=None):
             result = _patterns.collect_run_data(kfp, s3, "run-1")
         assert result is None
 
     def test_returns_none_on_resolve_exception(self):
         kfp = MagicMock()
         s3 = MagicMock()
-        with patch("autox_tools.experiments._patterns.resolve",
+        with patch("autox_tools.autorag._patterns.resolve",
                     side_effect=Exception("connection refused")):
             result = _patterns.collect_run_data(kfp, s3, "run-1")
         assert result is None
@@ -950,10 +950,10 @@ class TestCollectRunData:
         s3 = MagicMock()
         location = _resolver.ArtifactLocation("bucket", "pfx/", "run_params")
 
-        with patch("autox_tools.experiments._patterns.resolve", return_value=location), \
-             patch("autox_tools.experiments._patterns._find_summary_results",
+        with patch("autox_tools.autorag._patterns.resolve", return_value=location), \
+             patch("autox_tools.autorag._patterns._find_summary_results",
                    return_value=({}, None)), \
-             patch("autox_tools.experiments._patterns.fetch_all_pattern_metrics",
+             patch("autox_tools.autorag._patterns.fetch_all_pattern_metrics",
                    return_value=[]):
             result = _patterns.collect_run_data(
                 kfp, s3, "run-1", names={"run-1": "My Experiment"},
@@ -971,10 +971,10 @@ class TestCollectRunData:
             _patterns.PatternMetrics("P2", {"accuracy": 0.95, "f1": 0.9}, {}),
         ]
 
-        with patch("autox_tools.experiments._patterns.resolve", return_value=location), \
-             patch("autox_tools.experiments._patterns._find_summary_results",
+        with patch("autox_tools.autorag._patterns.resolve", return_value=location), \
+             patch("autox_tools.autorag._patterns._find_summary_results",
                    return_value=(None, None)), \
-             patch("autox_tools.experiments._patterns.fetch_all_pattern_metrics",
+             patch("autox_tools.autorag._patterns.fetch_all_pattern_metrics",
                    return_value=patterns):
             result = _patterns.collect_run_data(kfp, s3, "run-1")
 
@@ -986,10 +986,10 @@ class TestCollectRunData:
         s3 = MagicMock()
         location = _resolver.ArtifactLocation("bucket", "pfx/", "run_params")
 
-        with patch("autox_tools.experiments._patterns.resolve", return_value=location), \
-             patch("autox_tools.experiments._patterns._find_summary_results",
+        with patch("autox_tools.autorag._patterns.resolve", return_value=location), \
+             patch("autox_tools.autorag._patterns._find_summary_results",
                    return_value=(None, None)), \
-             patch("autox_tools.experiments._patterns.fetch_all_pattern_metrics",
+             patch("autox_tools.autorag._patterns.fetch_all_pattern_metrics",
                    return_value=[]):
             result = _patterns.collect_run_data(kfp, s3, "run-1")
 
@@ -1065,7 +1065,7 @@ class TestResolve:
         kfp.get_run.return_value = run
         s3 = MagicMock()
 
-        with patch("autox_tools.experiments._resolver._paginate_objects",
+        with patch("autox_tools.autorag._resolver._paginate_objects",
                     return_value={"Contents": []}):
             loc = _resolver.resolve(kfp, s3, "run-1")
 
@@ -1084,7 +1084,7 @@ class TestResolve:
                 return {"Contents": [{"Key": f"{prefix}file.json", "Size": 1}]}
             return {"Contents": []}
 
-        with patch("autox_tools.experiments._resolver._paginate_objects",
+        with patch("autox_tools.autorag._resolver._paginate_objects",
                     side_effect=mock_paginate):
             loc = _resolver.resolve(kfp, s3, "run-1")
 
@@ -1097,7 +1097,7 @@ class TestResolve:
         kfp.get_run.return_value = run
         s3 = MagicMock()
 
-        with patch("autox_tools.experiments._resolver._paginate_objects",
+        with patch("autox_tools.autorag._resolver._paginate_objects",
                     return_value={"Contents": []}):
             loc = _resolver.resolve(kfp, s3, "run-1")
 
@@ -1117,7 +1117,7 @@ class TestResolve:
             return {"Contents": []}
 
         with patch.dict(os.environ, {"ARTIFACTS_S3_BUCKET": "scan-bucket"}), \
-             patch("autox_tools.experiments._resolver._paginate_objects",
+             patch("autox_tools.autorag._resolver._paginate_objects",
                    side_effect=mock_paginate):
             loc = _resolver.resolve(kfp, s3, "run-1")
 
@@ -1138,7 +1138,7 @@ class TestResolve:
             return {"Contents": []}
 
         with patch.dict(os.environ, {"ARTIFACTS_S3_BUCKET": "bucket"}), \
-             patch("autox_tools.experiments._resolver._paginate_objects",
+             patch("autox_tools.autorag._resolver._paginate_objects",
                    side_effect=mock_paginate):
             loc = _resolver.resolve(kfp, s3, "run-1")
 
@@ -1152,7 +1152,7 @@ class TestResolve:
         s3 = MagicMock()
 
         with patch.dict(os.environ, {}, clear=True), \
-             patch("autox_tools.experiments._resolver._paginate_objects",
+             patch("autox_tools.autorag._resolver._paginate_objects",
                    return_value={"Contents": []}):
             os.environ.pop("ARTIFACTS_S3_BUCKET", None)
             loc = _resolver.resolve(kfp, s3, "run-1")
@@ -1165,7 +1165,7 @@ class TestResolve:
         kfp.get_run.return_value = run
         s3 = MagicMock()
 
-        with patch("autox_tools.experiments._resolver._paginate_objects",
+        with patch("autox_tools.autorag._resolver._paginate_objects",
                     return_value={"Contents": []}):
             loc = _resolver.resolve(kfp, s3, "run-1")
 
@@ -1181,7 +1181,7 @@ class TestResolve:
         kfp.get_run.return_value = run
         s3 = MagicMock()
 
-        with patch("autox_tools.experiments._resolver._paginate_objects",
+        with patch("autox_tools.autorag._resolver._paginate_objects",
                     return_value={"Contents": []}):
             loc = _resolver.resolve(kfp, s3, "run-1")
 
@@ -1201,7 +1201,7 @@ class TestResolve:
             return {"Contents": []}
 
         with patch.dict(os.environ, {"ARTIFACTS_S3_BUCKET": "bucket"}), \
-             patch("autox_tools.experiments._resolver._paginate_objects",
+             patch("autox_tools.autorag._resolver._paginate_objects",
                    side_effect=mock_paginate):
             loc = _resolver.resolve(kfp, s3, "run-1")
 
@@ -1350,6 +1350,48 @@ class TestParser:
         args = parser.parse_args(["compare", "r1", "r2"])
         assert args.detailed is False
 
+    def test_artifacts_args(self):
+        parser = cli._build_parser()
+        args = parser.parse_args(["artifacts", "run-1", "--pattern", "Pattern1"])
+        assert args.command == "artifacts"
+        assert args.run_id == "run-1"
+        assert args.pattern == "Pattern1"
+
+    def test_artifacts_all_patterns(self):
+        parser = cli._build_parser()
+        args = parser.parse_args(["artifacts", "run-1", "--pattern", "all"])
+        assert args.pattern == "all"
+
+    def test_artifacts_with_artifact_and_print(self):
+        parser = cli._build_parser()
+        args = parser.parse_args([
+            "artifacts", "run-1",
+            "--pattern", "P1", "--artifact", "pattern.json", "--print",
+        ])
+        assert args.artifact == "pattern.json"
+        assert args.print_content is True
+
+    def test_artifacts_download(self):
+        parser = cli._build_parser()
+        args = parser.parse_args(["artifacts", "run-1", "--download", "/tmp/out"])
+        assert args.download == "/tmp/out"
+
+    def test_artifacts_defaults(self):
+        parser = cli._build_parser()
+        args = parser.parse_args(["artifacts", "run-1"])
+        assert args.pattern is None
+        assert args.artifact is None
+        assert args.print_content is False
+        assert args.download is None
+
+    def test_artifacts_prefix_and_bucket(self):
+        parser = cli._build_parser()
+        args = parser.parse_args([
+            "artifacts", "run-1", "--prefix", "pfx/", "--bucket", "bkt",
+        ])
+        assert args.prefix == "pfx/"
+        assert args.bucket == "bkt"
+
 
 # ---------------------------------------------------------------------------
 # Fixtures for command tests
@@ -1466,7 +1508,7 @@ class TestCmdResults:
         s3 = MagicMock()
         data = _mock_collect()
 
-        with patch("autox_tools.experiments.cli.collect_run_data", return_value=data):
+        with patch("autox_tools.autorag.cli.collect_run_data", return_value=data):
             cli.cmd_results(kfp, s3, _results_ns())
 
         out = capsys.readouterr().out
@@ -1482,7 +1524,7 @@ class TestCmdResults:
         s3 = MagicMock()
         data = _mock_collect()
 
-        with patch("autox_tools.experiments.cli.collect_run_data", return_value=data):
+        with patch("autox_tools.autorag.cli.collect_run_data", return_value=data):
             cli.cmd_results(kfp, s3, _results_ns(detailed=True))
 
         out = capsys.readouterr().out
@@ -1497,7 +1539,7 @@ class TestCmdResults:
         s3 = MagicMock()
         data = _mock_collect()
 
-        with patch("autox_tools.experiments.cli.collect_run_data", return_value=data):
+        with patch("autox_tools.autorag.cli.collect_run_data", return_value=data):
             cli.cmd_results(kfp, s3, _results_ns(json=True))
 
         result = json.loads(capsys.readouterr().out)
@@ -1509,7 +1551,7 @@ class TestCmdResults:
         kfp = MagicMock()
         s3 = MagicMock()
 
-        with patch("autox_tools.experiments.cli.collect_run_data", return_value=None), \
+        with patch("autox_tools.autorag.cli.collect_run_data", return_value=None), \
              pytest.raises(SystemExit, match="Could not locate"):
             cli.cmd_results(kfp, s3, _results_ns())
 
@@ -1518,7 +1560,7 @@ class TestCmdResults:
         s3 = MagicMock()
         data = _mock_collect(summary={}, patterns=[])
 
-        with patch("autox_tools.experiments.cli.collect_run_data", return_value=data), \
+        with patch("autox_tools.autorag.cli.collect_run_data", return_value=data), \
              pytest.raises(SystemExit, match="No evaluation_results"):
             cli.cmd_results(kfp, s3, _results_ns())
 
@@ -1527,7 +1569,7 @@ class TestCmdResults:
         s3 = MagicMock()
         data = _mock_collect(patterns=[])
 
-        with patch("autox_tools.experiments.cli.collect_run_data", return_value=data):
+        with patch("autox_tools.autorag.cli.collect_run_data", return_value=data):
             cli.cmd_results(kfp, s3, _results_ns())
 
         out = capsys.readouterr().out
@@ -1541,7 +1583,7 @@ class TestCmdResults:
         run_id = "a3f1b2c4-dead-beef-1234-567890abcdef"
         data = _mock_collect(run_id=run_id, display_name="My Cool Experiment")
 
-        with patch("autox_tools.experiments.cli.collect_run_data", return_value=data):
+        with patch("autox_tools.autorag.cli.collect_run_data", return_value=data):
             cli.cmd_results(kfp, s3, _results_ns(names=f"{run_id}=My Cool Experiment"))
 
         out = capsys.readouterr().out
@@ -1552,9 +1594,9 @@ class TestCmdResults:
         s3 = MagicMock()
         data = _mock_collect()
 
-        with patch("autox_tools.experiments.cli.collect_run_data", return_value=data), \
-             patch("autox_tools.experiments._report.require_matplotlib"), \
-             patch("autox_tools.experiments._report.generate_results_pdf") as mock_gen:
+        with patch("autox_tools.autorag.cli.collect_run_data", return_value=data), \
+             patch("autox_tools.autorag._report.require_matplotlib"), \
+             patch("autox_tools.autorag._report.generate_results_pdf") as mock_gen:
             cli.cmd_results(kfp, s3, _results_ns(pdf="/tmp/report.pdf"))
 
         mock_gen.assert_called_once()
@@ -1565,7 +1607,7 @@ class TestCmdResults:
         s3 = MagicMock()
         data = _mock_collect()
 
-        with patch("autox_tools.experiments.cli.collect_run_data", return_value=data):
+        with patch("autox_tools.autorag.cli.collect_run_data", return_value=data):
             cli.cmd_results(kfp, s3, _results_ns(sort_by="faithfulness"))
 
         out = capsys.readouterr().out
@@ -1584,7 +1626,7 @@ class TestCmdResults:
             patterns=[],
         )
 
-        with patch("autox_tools.experiments.cli.collect_run_data", return_value=data):
+        with patch("autox_tools.autorag.cli.collect_run_data", return_value=data):
             cli.cmd_results(kfp, s3, _results_ns())
 
         out = capsys.readouterr().out
@@ -1601,11 +1643,11 @@ class TestCmdResults:
             patterns=[],
         )
 
-        with patch("autox_tools.experiments.cli.collect_run_data", return_value=data):
+        with patch("autox_tools.autorag.cli.collect_run_data", return_value=data):
             cli.cmd_results(kfp, s3, _results_ns())
 
         out = capsys.readouterr().out
-        metric_lines = [l for l in out.splitlines() if "0." in l and "==" not in l]
+        metric_lines = [ln for ln in out.splitlines() if "0." in ln and "==" not in ln]
         assert "answer_correctness" in metric_lines[0]
 
     def test_optimization_label_in_summary(self, capsys):
@@ -1613,7 +1655,7 @@ class TestCmdResults:
         s3 = MagicMock()
         data = _mock_collect()
 
-        with patch("autox_tools.experiments.cli.collect_run_data", return_value=data):
+        with patch("autox_tools.autorag.cli.collect_run_data", return_value=data):
             cli.cmd_results(kfp, s3, _results_ns())
 
         out = capsys.readouterr().out
@@ -1628,7 +1670,7 @@ class TestCmdResults:
             duration_seconds=754.0,
         )
 
-        with patch("autox_tools.experiments.cli.collect_run_data", return_value=data):
+        with patch("autox_tools.autorag.cli.collect_run_data", return_value=data):
             cli.cmd_results(kfp, s3, _results_ns())
 
         out = capsys.readouterr().out
@@ -1641,7 +1683,7 @@ class TestCmdResults:
         s3 = MagicMock()
         data = _mock_collect(pipeline_params=_SAMPLE_PIPELINE_PARAMS)
 
-        with patch("autox_tools.experiments.cli.collect_run_data", return_value=data):
+        with patch("autox_tools.autorag.cli.collect_run_data", return_value=data):
             cli.cmd_results(kfp, s3, _results_ns())
 
         out = capsys.readouterr().out
@@ -1656,7 +1698,7 @@ class TestCmdResults:
         s3 = MagicMock()
         data = _mock_collect(pipeline_params={})
 
-        with patch("autox_tools.experiments.cli.collect_run_data", return_value=data):
+        with patch("autox_tools.autorag.cli.collect_run_data", return_value=data):
             cli.cmd_results(kfp, s3, _results_ns())
 
         out = capsys.readouterr().out
@@ -1667,7 +1709,7 @@ class TestCmdResults:
         s3 = MagicMock()
         data = _mock_collect()
 
-        with patch("autox_tools.experiments.cli.collect_run_data", return_value=data):
+        with patch("autox_tools.autorag.cli.collect_run_data", return_value=data):
             cli.cmd_results(kfp, s3, _results_ns(detailed=True, top_n=2))
 
         out = capsys.readouterr().out
@@ -1706,7 +1748,7 @@ class TestCmdCompare:
         def mock_collect(kfp, s3, run_id, **kw):
             return data1 if run_id == "run-aaa" else data2
 
-        with patch("autox_tools.experiments.cli.collect_run_data", side_effect=mock_collect):
+        with patch("autox_tools.autorag.cli.collect_run_data", side_effect=mock_collect):
             cli.cmd_compare(MagicMock(), MagicMock(), _compare_ns())
 
         out = capsys.readouterr().out
@@ -1721,7 +1763,7 @@ class TestCmdCompare:
         def mock_collect(kfp, s3, run_id, **kw):
             return data1 if run_id == "run-aaa" else data2
 
-        with patch("autox_tools.experiments.cli.collect_run_data", side_effect=mock_collect):
+        with patch("autox_tools.autorag.cli.collect_run_data", side_effect=mock_collect):
             cli.cmd_compare(MagicMock(), MagicMock(), _compare_ns(detailed=True))
 
         out = capsys.readouterr().out
@@ -1734,7 +1776,7 @@ class TestCmdCompare:
         def mock_collect(kfp, s3, run_id, **kw):
             return data1 if run_id == "run-aaa" else data2
 
-        with patch("autox_tools.experiments.cli.collect_run_data", side_effect=mock_collect):
+        with patch("autox_tools.autorag.cli.collect_run_data", side_effect=mock_collect):
             cli.cmd_compare(MagicMock(), MagicMock(), _compare_ns(detailed=True))
 
         out = capsys.readouterr().out
@@ -1747,7 +1789,7 @@ class TestCmdCompare:
         def mock_collect(kfp, s3, run_id, **kw):
             return data1 if run_id == "run-aaa" else data2
 
-        with patch("autox_tools.experiments.cli.collect_run_data", side_effect=mock_collect):
+        with patch("autox_tools.autorag.cli.collect_run_data", side_effect=mock_collect):
             cli.cmd_compare(MagicMock(), MagicMock(), _compare_ns(json=True))
 
         result = json.loads(capsys.readouterr().out)
@@ -1762,19 +1804,19 @@ class TestCmdCompare:
         def mock_collect(kfp, s3, run_id, **kw):
             return data1 if run_id == "run-aaa" else data2
 
-        with patch("autox_tools.experiments.cli.collect_run_data", side_effect=mock_collect):
+        with patch("autox_tools.autorag.cli.collect_run_data", side_effect=mock_collect):
             cli.cmd_compare(MagicMock(), MagicMock(), _compare_ns(metrics="accuracy"))
 
         out = capsys.readouterr().out
         assert "accuracy" in out
 
     def test_no_location_exits(self):
-        with patch("autox_tools.experiments.cli.collect_run_data", return_value=None), \
+        with patch("autox_tools.autorag.cli.collect_run_data", return_value=None), \
              pytest.raises(SystemExit, match="Could not locate"):
             cli.cmd_compare(MagicMock(), MagicMock(), _compare_ns())
 
     def test_both_runs_fail_reports_both(self):
-        with patch("autox_tools.experiments.cli.collect_run_data", return_value=None), \
+        with patch("autox_tools.autorag.cli.collect_run_data", return_value=None), \
              pytest.raises(SystemExit) as exc_info:
             cli.cmd_compare(MagicMock(), MagicMock(), _compare_ns())
         msg = str(exc_info.value)
@@ -1782,7 +1824,7 @@ class TestCmdCompare:
         assert "run-bbb" in msg
 
     def test_exception_in_collect_exits_cleanly(self):
-        with patch("autox_tools.experiments.cli.collect_run_data",
+        with patch("autox_tools.autorag.cli.collect_run_data",
                     side_effect=Exception("connection refused")), \
              pytest.raises(SystemExit, match="Could not locate"):
             cli.cmd_compare(MagicMock(), MagicMock(), _compare_ns())
@@ -1799,7 +1841,7 @@ class TestCmdCompare:
         def mock_collect(kfp, s3, run_id, **kw):
             return data1 if run_id == "run-aaa" else data2
 
-        with patch("autox_tools.experiments.cli.collect_run_data", side_effect=mock_collect):
+        with patch("autox_tools.autorag.cli.collect_run_data", side_effect=mock_collect):
             cli.cmd_compare(
                 MagicMock(), MagicMock(),
                 _compare_ns(names="run-aaa=Baseline,run-bbb=New Config"),
@@ -1815,9 +1857,9 @@ class TestCmdCompare:
         def mock_collect(kfp, s3, run_id, **kw):
             return data1 if run_id == "run-aaa" else data2
 
-        with patch("autox_tools.experiments.cli.collect_run_data", side_effect=mock_collect), \
-             patch("autox_tools.experiments._report.require_matplotlib"), \
-             patch("autox_tools.experiments._report.generate_compare_pdf") as mock_gen:
+        with patch("autox_tools.autorag.cli.collect_run_data", side_effect=mock_collect), \
+             patch("autox_tools.autorag._report.require_matplotlib"), \
+             patch("autox_tools.autorag._report.generate_compare_pdf") as mock_gen:
             cli.cmd_compare(MagicMock(), MagicMock(), _compare_ns(pdf="/tmp/cmp.pdf"))
 
         mock_gen.assert_called_once()
@@ -1829,7 +1871,7 @@ class TestCmdCompare:
         def mock_collect(kfp, s3, run_id, **kw):
             return data1 if run_id == "run-aaa" else data2
 
-        with patch("autox_tools.experiments.cli.collect_run_data", side_effect=mock_collect):
+        with patch("autox_tools.autorag.cli.collect_run_data", side_effect=mock_collect):
             cli.cmd_compare(MagicMock(), MagicMock(), _compare_ns())
 
         out = capsys.readouterr().out
@@ -1851,7 +1893,7 @@ class TestCmdCompare:
         def mock_collect(kfp, s3, run_id, **kw):
             return data1 if "72cdd9f0" in run_id else data2
 
-        with patch("autox_tools.experiments.cli.collect_run_data", side_effect=mock_collect):
+        with patch("autox_tools.autorag.cli.collect_run_data", side_effect=mock_collect):
             cli.cmd_compare(
                 MagicMock(), MagicMock(),
                 _compare_ns(
@@ -1880,7 +1922,7 @@ class TestCmdCompare:
         def mock_collect(kfp, s3, run_id, **kw):
             return data1 if run_id == "run-aaa" else data2
 
-        with patch("autox_tools.experiments.cli.collect_run_data", side_effect=mock_collect):
+        with patch("autox_tools.autorag.cli.collect_run_data", side_effect=mock_collect):
             cli.cmd_compare(MagicMock(), MagicMock(), _compare_ns())
 
         out = capsys.readouterr().out
@@ -1909,9 +1951,9 @@ class TestCmdExport:
             ),
         ]
 
-        with patch("autox_tools.experiments.cli.resolve",
+        with patch("autox_tools.autorag.cli.resolve",
                     return_value=_resolver.ArtifactLocation("b", "pfx/", "run_params")), \
-             patch("autox_tools.experiments.cli.list_and_categorize", return_value=artifacts), \
+             patch("autox_tools.autorag.cli.list_and_categorize", return_value=artifacts), \
              tempfile.TemporaryDirectory() as tmpdir:
             cli.cmd_export(kfp, s3, _export_ns(output=tmpdir))
 
@@ -1926,7 +1968,7 @@ class TestCmdExport:
         kfp = MagicMock()
         s3 = MagicMock()
 
-        with patch("autox_tools.experiments.cli.resolve", return_value=None), \
+        with patch("autox_tools.autorag.cli.resolve", return_value=None), \
              pytest.raises(SystemExit, match="Could not locate"):
             cli.cmd_export(kfp, s3, _export_ns())
 
@@ -1934,9 +1976,9 @@ class TestCmdExport:
         kfp = MagicMock()
         s3 = MagicMock()
 
-        with patch("autox_tools.experiments.cli.resolve",
+        with patch("autox_tools.autorag.cli.resolve",
                     return_value=_resolver.ArtifactLocation("b", "pfx/", "run_params")), \
-             patch("autox_tools.experiments.cli.list_and_categorize", return_value=[]), \
+             patch("autox_tools.autorag.cli.list_and_categorize", return_value=[]), \
              pytest.raises(SystemExit, match="No artifacts"):
             cli.cmd_export(kfp, s3, _export_ns())
 
@@ -1950,11 +1992,11 @@ class TestCmdExport:
             ),
         ]
 
-        with patch("autox_tools.experiments.cli.resolve",
+        with patch("autox_tools.autorag.cli.resolve",
                     return_value=_resolver.ArtifactLocation("b", "pfx/", "run_params")), \
-             patch("autox_tools.experiments.cli.list_and_categorize", return_value=artifacts), \
+             patch("autox_tools.autorag.cli.list_and_categorize", return_value=artifacts), \
              tempfile.TemporaryDirectory(), \
-             patch("autox_tools.experiments.cli.os.makedirs"):
+             patch("autox_tools.autorag.cli.os.makedirs"):
             s3.download_file = MagicMock()
             cli.cmd_export(kfp, s3, _export_ns())
 
@@ -1998,9 +2040,9 @@ class TestCmdInfo:
             ),
         ]
 
-        with patch("autox_tools.experiments.cli.resolve",
+        with patch("autox_tools.autorag.cli.resolve",
                     return_value=_resolver.ArtifactLocation("b", "pfx/", "run_params")), \
-             patch("autox_tools.experiments.cli.list_and_categorize", return_value=artifacts):
+             patch("autox_tools.autorag.cli.list_and_categorize", return_value=artifacts):
             cli.cmd_info(kfp, s3, _info_ns())
 
         out = capsys.readouterr().out
@@ -2015,9 +2057,9 @@ class TestCmdInfo:
         kfp.get_run.return_value = self._make_run()
         s3 = MagicMock()
 
-        with patch("autox_tools.experiments.cli.resolve",
+        with patch("autox_tools.autorag.cli.resolve",
                     return_value=_resolver.ArtifactLocation("b", "pfx/", "run_params")), \
-             patch("autox_tools.experiments.cli.list_and_categorize", return_value=[]):
+             patch("autox_tools.autorag.cli.list_and_categorize", return_value=[]):
             cli.cmd_info(kfp, s3, _info_ns(json=True))
 
         result = json.loads(capsys.readouterr().out)
@@ -2030,7 +2072,7 @@ class TestCmdInfo:
         kfp.get_run.return_value = self._make_run()
         s3 = MagicMock()
 
-        with patch("autox_tools.experiments.cli.resolve", return_value=None):
+        with patch("autox_tools.autorag.cli.resolve", return_value=None):
             cli.cmd_info(kfp, s3, _info_ns())
 
         out = capsys.readouterr().out
