@@ -4,8 +4,8 @@ set -euo pipefail
 
 BASE_DIR=$(dirname $(readlink -f ${BASH_SOURCE[0]} ))
 
-source "${BASE_DIR}/gitops.sh"
-source "${BASE_DIR}/helm.sh"
+source "${BASE_DIR}/utils/gitops.sh"
+source "${BASE_DIR}/utils/helm.sh"
 
 OPENSHIFT_MARKETPLACE_NAMESPACE="openshift-marketplace"
 # RHOAI specific namespaces

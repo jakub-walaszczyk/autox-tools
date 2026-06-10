@@ -105,10 +105,10 @@ fi
 CATALOG_SOURCE_IMAGE="${CATALOG_SOURCE_IMAGE/@/\\@}"
 if [ ${INSTALLATION_TYPE} == "addon" ] && [ -n "${CATALOG_SOURCE_IMAGE-}" ] ; then
      perl -i -pe"s,image: .*,image: ${CATALOG_SOURCE_IMAGE},g" \
-       ${INSTALLATION_TYPE}/${INSTALLATION_TYPE}-catalogsource.yaml
+       ${INSTALLATION_TYPE}/${INSTALLATION_TYPE}/${INSTALLATION_TYPE}-catalogsource.yaml
 else
      perl -i -pe "s,image: .*,image: ${CATALOG_SOURCE_IMAGE},g" \
-       ${INSTALLATION_TYPE}-catalogsource.yaml
+       ${INSTALLATION_TYPE}/${INSTALLATION_TYPE}-catalogsource.yaml
 
 fi
 
@@ -146,6 +146,8 @@ fi
 if [ ${INSTALLATION_TYPE} == "addon" ]; then
     oc apply -f ${INSTALLATION_TYPE} -n ${RHODS_OPERATOR_NAMESPACE}
 else
-    oc apply -f ${INSTALLATION_TYPE}-catalogsource.yaml -n ${OPENSHIFT_MARKETPLACE_NAMESPACE}
-    oc apply -f ${INSTALLATION_TYPE} -n ${RHODS_OPERATOR_NAMESPACE}
+    oc apply -f ${INSTALLATION_TYPE}/${INSTALLATION_TYPE}-catalogsource.yaml -n ${OPENSHIFT_MARKETPLACE_NAMESPACE}
+    find ${INSTALLATION_TYPE} -name '*.yaml' \
+    ! -name "${INSTALLATION_TYPE}-catalogsource.yaml" \
+    | xargs -I {} oc apply -f {}
 fi
