@@ -7,6 +7,7 @@ AUTOX_SCRIPTS_DIR=$(dirname "${SCRIPT_DIR}")
 OPERATOR_NAMESPACE="redhat-ods-operator"
 APPS_NAMESPACE="redhat-ods-applications"
 OPERATOR_CSV_PREFIX="rhods-operator"
+PROFILES="$SCRIPT_DIR/profiles"
 
 function delete_stuck_olm_resources() {
   local ns="${1}"
@@ -88,11 +89,47 @@ else
   echo "network cluster operator not found, skipping delete"
 fi
 
+function copy_default_profiles() {
+    local PROFILES_PATH=$1
+    
+    mkdir -p $PROFILES_PATH
+
+    for profile in $(oc get hardwareprofile -n redhat-ods-applications -o jsonpath='{.items[*].metadata.name}'); do
+      oc get hardwareprofile "$profile" -n redhat-ods-applications -o yaml | \
+      yq 'del(
+          .metadata.uid,
+          .metadata.resourceVersion,
+          .metadata.creationTimestamp,
+          .metadata.generation,
+          .metadata.annotations,
+          .metadata.ownerReferences,
+          .status
+      )' > "$PROFILES_PATH/${profile}.yaml"
+    done
+}
+
+on_success_only() {
+    # CRITICAL: Capture the exit code immediately as the first line
+    local exit_code=$?
+    
+    if [ "$exit_code" -eq 0 ]; then
+        rm -rf $PROFILES
+    else
+        echo "❌ Script failed with exit code $exit_code. Skipping removal of $PROFILES folder."
+    fi
+}
+
+trap on_success_only EXIT
+
 echo "=== Removing Kyverno ==="
 bash "${AUTOX_SCRIPTS_DIR}/utils/remove_kyverno.sh"
 
 echo "=== Cleaning stuck OLM resources in ${OPERATOR_NAMESPACE} ==="
 delete_stuck_olm_resources "${OPERATOR_NAMESPACE}" "${OPERATOR_CSV_PREFIX}"
+
+if [ ! -e "$PROFILES" ]; then
+    copy_default_profiles $PROFILES
+fi
 
 echo "=== Running operator cleanup (keeping user resources) ==="
 bash "${SCRIPT_DIR}/cleanup.sh" -K -t operator
@@ -102,6 +139,8 @@ bash "${AUTOX_SCRIPTS_DIR}/utils/install_kyverno.sh"
 
 echo "=== Installing RHOAI operator (channel=${UPDATE_CHANNEL}) ==="
 bash "${SCRIPT_DIR}/setup.sh" -t operator -u "${UPDATE_CHANNEL}" -i "${CATALOG_SOURCE_IMAGE}"
+
+oc apply -f $PROFILES
 
 echo "=== Verification ==="
 oc get pods -n "${OPERATOR_NAMESPACE}"
