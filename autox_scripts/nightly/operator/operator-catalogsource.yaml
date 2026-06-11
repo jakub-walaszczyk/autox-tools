@@ -7,7 +7,7 @@ metadata:
 spec:
   displayName: Red Hat OpenShift AI
   publisher: RHOAI Development Catalog
-  image: quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5-ea.2@sha256:0dc0197576b1e10271b901d19055165959c47a54d6f3fafa0484fb65693ea97e
+  image: quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.5-ea.2@sha256:9dcae6b3568289a2a092fbec752fcb3362eb001cf0c20fc92c52ae8d24ae7725
   sourceType: grpc
   grpcPodConfig:
     securityContextConfig: restricted

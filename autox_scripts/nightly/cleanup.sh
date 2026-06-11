@@ -233,28 +233,50 @@ function delete_resource_with_timeout() {
   fi
 }
 
+function clear_namespace_finalizers() {
+  local ns="$1"
+  local ns_json
+
+  if ! ns_json=$(oc get namespace "${ns}" -o json 2>/dev/null) || [[ -z "${ns_json}" ]]; then
+    echo "    Namespace ${ns} is gone, skipping finalizer cleanup"
+    return 0
+  fi
+
+  oc patch namespace "${ns}" -p '{"spec":{"finalizers":[]}}' --type=merge 2>/dev/null || true
+
+  if ! ns_json=$(oc get namespace "${ns}" -o json 2>/dev/null) || [[ -z "${ns_json}" ]]; then
+    echo "    Namespace ${ns} deleted after patch, skipping finalize"
+    return 0
+  fi
+
+  echo "${ns_json}" | jq '.spec.finalizers = []' | oc replace --raw "/api/v1/namespaces/${ns}/finalize" -f - 2>/dev/null || true
+}
+
 function delete_namespace_with_cleanup() {
   local namespaces="$@"
 
   for ns in ${namespaces}; do
     echo "Processing namespace: $ns"
 
-    # Delete all resources in the namespace with a timeout
-    if oc get ns $ns &>/dev/null; then
-      echo "  Deleting resources in namespace $ns..."
-      oc delete all --all -n $ns --ignore-not-found --timeout=30s 2>/dev/null || true
+    if ! oc get ns "${ns}" &>/dev/null; then
+      echo "  Namespace ${ns} not found, skipping"
+      continue
     fi
+
+    # Delete all resources in the namespace with a timeout
+    echo "  Deleting resources in namespace $ns..."
+    oc delete all --all -n "${ns}" --ignore-not-found --timeout=30s 2>/dev/null || true
 
     # Delete namespace
     echo "  Deleting namespace $ns..."
-    oc delete namespace --force $ns --ignore-not-found --timeout=10s || true
+    oc delete namespace --force "${ns}" --ignore-not-found --timeout=10s 2>/dev/null || true
 
     echo "  Waiting for namespace deletion..."
     sleep 2
 
     # Check if namespace is stuck in Terminating state and force cleanup
     echo "  Checking namespace status..."
-    local ns_status=$(oc get ns $ns -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+    local ns_status=$(oc get ns "${ns}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
     echo "  Status: $ns_status"
 
     if [[ "$ns_status" == "Terminating" ]]; then
@@ -264,24 +286,28 @@ function delete_namespace_with_cleanup() {
       cleanup_stale_apiservices
 
       # Check if webhooks are the problem
-      local webhook_error=$(oc get namespace $ns -o json 2>/dev/null | jq -r '.status.conditions[] | select(.type == "NamespaceDeletionContentFailure") | .message' | grep -i "webhook" || echo "")
+      local webhook_error=$(oc get namespace "${ns}" -o json 2>/dev/null | jq -r '.status.conditions[]? | select(.type == "NamespaceDeletionContentFailure") | .message' | grep -i "webhook" || echo "")
 
       if [[ -n "$webhook_error" ]]; then
         echo "    Webhook blocking deletion detected, removing webhooks..."
         # Delete both validating and mutating webhooks that reference this namespace
         for webhook_type in validatingwebhookconfigurations mutatingwebhookconfigurations; do
-          for webhook in $(oc get $webhook_type -o json | jq -r --arg ns "$ns" '.items[] | select(.webhooks[]?.clientConfig.service.namespace == $ns) | .metadata.name'); do
+          for webhook in $(oc get "${webhook_type}" -o json | jq -r --arg ns "${ns}" '.items[] | select(.webhooks[]?.clientConfig.service.namespace == $ns) | .metadata.name'); do
             echo "      Deleting $webhook_type: $webhook"
-            oc delete $webhook_type "$webhook" 2>/dev/null || true
+            oc delete "${webhook_type}" "${webhook}" 2>/dev/null || true
           done
         done
       else
         echo "    No webhook issue detected, removing namespace finalizers..."
       fi
 
-      # Remove namespace finalizers if any
-      oc patch namespace $ns -p '{"spec":{"finalizers":[]}}' --type=merge 2>/dev/null || true
-      oc get namespace $ns -o json | jq '.spec.finalizers = []' | oc replace --raw /api/v1/namespaces/$ns/finalize -f -
+      ns_status=$(oc get ns "${ns}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+      if [[ "${ns_status}" != "Terminating" ]]; then
+        echo "    Namespace ${ns} is no longer Terminating (status: ${ns_status}), done"
+        continue
+      fi
+
+      clear_namespace_finalizers "${ns}"
     fi
   done
 }
