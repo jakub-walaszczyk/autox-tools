@@ -1,3 +1,0 @@
-"""
-Model discovery module.
-"""
