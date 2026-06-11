@@ -349,30 +349,42 @@ def cmd_watch(kfp_client: Any, args: argparse.Namespace, **_: Any) -> None:
 
 
 def _list_run_pods(k8s_api: Any, namespace: str, run_id: str) -> list[Any]:
-    """List pods for a pipeline run using the ``pipeline/runid`` label.
+    """List all pods for a pipeline run.
 
-    Falls back to a broader namespace list filtered by run ID in the pod name
-    if the label selector returns no results.
+    Merges results from two discovery methods so that both driver and impl
+    pods are found even when only one kind carries the KFP label:
+
+    1. Label selector ``pipeline/runid=<run_id>``
+    2. Namespace-wide list filtered by run ID in the pod name
     """
+    seen: dict[str, Any] = {}
+
     try:
         pods = k8s_api.list_namespaced_pod(
             namespace=namespace,
             label_selector=f"pipeline/runid={run_id}",
             _request_timeout=30,
         )
-        items = pods.items if hasattr(pods, "items") else []
-        if items:
-            return items
+        for p in (pods.items if hasattr(pods, "items") else []):
+            name = (p.metadata.name or "") if p.metadata else ""
+            if name:
+                seen[name] = p
     except Exception as exc:
         _exit_k8s_error(exc, namespace)
 
     try:
-        pods = k8s_api.list_namespaced_pod(namespace=namespace, _request_timeout=30)
-        items = pods.items if hasattr(pods, "items") else []
-        return [p for p in items if run_id in (p.metadata.name or "")]
+        pods = k8s_api.list_namespaced_pod(
+            namespace=namespace, _request_timeout=30,
+        )
+        for p in (pods.items if hasattr(pods, "items") else []):
+            name = (p.metadata.name or "") if p.metadata else ""
+            if name and name not in seen and run_id in name:
+                seen[name] = p
     except Exception as exc:
-        _exit_k8s_error(exc, namespace)
-        return []  # unreachable, keeps mypy happy
+        if not seen:
+            _exit_k8s_error(exc, namespace)
+
+    return list(seen.values())
 
 
 def _exit_k8s_error(exc: Exception, namespace: str) -> None:
@@ -451,6 +463,31 @@ def _is_pod_failed(pod: Any) -> bool:
         if terminated and terminated.exit_code != 0:
             return True
     return False
+
+
+def _prefer_impl_pod(
+    pod_name: str,
+    pods_by_name: dict[str, Any],
+) -> tuple[str, Any]:
+    """Resolve a driver pod to its impl counterpart when available.
+
+    KFP v2 records the driver pod on ``task.pod_name``, but user code runs
+    in the impl pod.  When *pod_name* ends with a ``-driver`` segment, this
+    looks for a sibling pod whose name shares the same prefix and contains
+    ``-impl-``.  Returns ``(resolved_name, pod_object)``.
+    """
+    pod = pods_by_name.get(pod_name)
+
+    parts = pod_name.rsplit("-driver", 1)
+    if len(parts) < 2:
+        return pod_name, pod
+
+    prefix = parts[0]
+    for candidate_name, candidate_pod in pods_by_name.items():
+        if candidate_name.startswith(prefix) and "-impl-" in candidate_name:
+            return candidate_name, candidate_pod
+
+    return pod_name, pod
 
 
 def _find_exec_pods(pod_items: list[Any], prefer_failed: bool) -> list[Any]:
@@ -579,35 +616,41 @@ def cmd_logs(kfp_client: Any, args: argparse.Namespace, **kwargs: Any) -> None:
     task_names_set = {t["name"] for t in tasks}
     results: list[dict[str, Any]] = []
 
-    # Strategy 1: use pod_name from KFP task details (direct, authoritative)
+    # Strategy 1: use pod_name from KFP task details, preferring impl pods
     matched_tasks: set[str] = set()
     for t in tasks:
         task_pod = t.get("pod_name", "")
         if not task_pod:
             continue
 
-        pod = pods_by_name.get(task_pod)
-        if not pod:
+        if task_pod not in pods_by_name:
             continue
+
+        resolved_name, pod = _prefer_impl_pod(task_pod, pods_by_name)
 
         matched_tasks.add(t["name"])
         cstatuses = []
         if pod.status and pod.status.container_statuses:
             cstatuses = pod.status.container_statuses
         cnames = [c.name for c in (pod.spec.containers or [])] if pod.spec else ["main"]
-        clogs = _fetch_pod_logs(k8s_api, task_pod, namespace, cnames, cstatuses, args.tail)
+        clogs = _fetch_pod_logs(k8s_api, resolved_name, namespace, cnames, cstatuses, args.tail)
 
         results.append({
             "name": t["name"],
             "state": t["state"],
-            "pod": task_pod,
+            "pod": resolved_name,
             "containers": clogs,
         })
 
     # Strategy 2: for tasks without pod_name, match pods via labels/annotations/name
+    # Sort so impl pods are visited before driver pods — first match wins.
     unmatched_tasks = task_names_set - matched_tasks
     if unmatched_tasks:
-        for pod in pod_items:
+        sorted_pods = sorted(
+            pod_items,
+            key=lambda p: 0 if "-impl-" in (p.metadata.name or "") else 1,
+        )
+        for pod in sorted_pods:
             pname = pod.metadata.name or ""
             if pname in {r["pod"] for r in results}:
                 continue

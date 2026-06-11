@@ -717,6 +717,128 @@ class TestCmdLogs:
         assert "fallback error output" in out
         assert "impl-456" in out
 
+    def test_strategy1_resolves_driver_to_impl_pod(self, capsys):
+        """When KFP reports a driver pod_name, logs should come from the impl pod."""
+        tasks = [
+            _make_task(
+                "search-space-optimization", "Failed",
+                error="exit 1",
+                pod_name="pipeline-abc-system-container-driver-111",
+            ),
+        ]
+        run = _make_run(state="Failed", task_details=tasks)
+
+        driver_pod = MagicMock()
+        driver_pod.metadata.name = "pipeline-abc-system-container-driver-111"
+        driver_pod.metadata.labels = {"pipeline/runid": "test-id"}
+        driver_pod.metadata.annotations = {}
+        driver_pod.status.phase = "Succeeded"
+        driver_pod.status.container_statuses = []
+        d_main = MagicMock()
+        d_main.name = "main"
+        driver_pod.spec.containers = [d_main]
+
+        impl_pod = MagicMock()
+        impl_pod.metadata.name = "pipeline-abc-system-container-impl-222"
+        impl_pod.metadata.labels = {}
+        impl_pod.metadata.annotations = {}
+        impl_pod.status.phase = "Failed"
+        impl_pod.status.container_statuses = []
+        i_main = MagicMock()
+        i_main.name = "main"
+        impl_pod.spec.containers = [i_main]
+
+        k8s_api = MagicMock()
+        pods_response = MagicMock()
+        pods_response.items = [driver_pod, impl_pod]
+        k8s_api.list_namespaced_pod.return_value = pods_response
+        k8s_api.read_namespaced_pod_log.return_value = "actual user error"
+
+        client = MagicMock()
+        client.get_run.return_value = run
+
+        with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
+            args = argparse.Namespace(run_id="test-id", tail=100, all=False, json=False)
+            cli.cmd_logs(client, args, k8s_api=k8s_api)
+
+        out = capsys.readouterr().out
+        assert "impl-222" in out
+        assert "driver-111" not in out
+
+    def test_strategy2_prefers_impl_over_driver(self, capsys):
+        """Strategy 2 should pick the impl pod when both share the same component label."""
+        tasks = [_make_task("documents-discovery", "Failed")]
+        run = _make_run(state="Failed", task_details=tasks)
+
+        driver_pod = MagicMock()
+        driver_pod.metadata.name = "pipeline-zc4fk-system-container-driver-100"
+        driver_pod.metadata.labels = {
+            "pipelines.kubeflow.org/v2_component_name": "comp-documents-discovery",
+            "pipeline/runid": "test-id",
+        }
+        driver_pod.metadata.annotations = {}
+        driver_pod.status.phase = "Succeeded"
+        driver_pod.status.container_statuses = []
+        d_main = MagicMock()
+        d_main.name = "main"
+        driver_pod.spec.containers = [d_main]
+
+        impl_pod = MagicMock()
+        impl_pod.metadata.name = "pipeline-zc4fk-system-container-impl-200"
+        impl_pod.metadata.labels = {
+            "pipelines.kubeflow.org/v2_component_name": "comp-documents-discovery",
+            "pipeline/runid": "test-id",
+        }
+        impl_pod.metadata.annotations = {}
+        impl_pod.status.phase = "Failed"
+        impl_pod.status.container_statuses = []
+        i_main = MagicMock()
+        i_main.name = "main"
+        impl_pod.spec.containers = [i_main]
+
+        k8s_api = MagicMock()
+        pods_response = MagicMock()
+        # Driver listed first — without the sort fix, it would be matched first.
+        pods_response.items = [driver_pod, impl_pod]
+        k8s_api.list_namespaced_pod.return_value = pods_response
+        k8s_api.read_namespaced_pod_log.return_value = "impl error trace"
+
+        client = MagicMock()
+        client.get_run.return_value = run
+
+        with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
+            args = argparse.Namespace(run_id="test-id", tail=100, all=False, json=False)
+            cli.cmd_logs(client, args, k8s_api=k8s_api)
+
+        out = capsys.readouterr().out
+        assert "impl-200" in out
+        assert "driver-100" not in out
+
+    def test_list_run_pods_merges_label_and_name_search(self):
+        """_list_run_pods should find impl pods via name even when label search only returns drivers."""
+        driver_pod = MagicMock()
+        driver_pod.metadata.name = "pipeline-test-id-driver-aaa"
+        driver_pod.metadata.labels = {"pipeline/runid": "test-id"}
+
+        impl_pod = MagicMock()
+        impl_pod.metadata.name = "pipeline-test-id-impl-bbb"
+        impl_pod.metadata.labels = {}
+
+        label_response = MagicMock()
+        label_response.items = [driver_pod]
+
+        all_response = MagicMock()
+        all_response.items = [driver_pod, impl_pod, MagicMock(metadata=MagicMock(name="unrelated-pod"))]
+
+        k8s_api = MagicMock()
+        k8s_api.list_namespaced_pod.side_effect = [label_response, all_response]
+
+        pods = cli._list_run_pods(k8s_api, "ns", "test-id")
+        pod_names = {p.metadata.name for p in pods}
+        assert "pipeline-test-id-driver-aaa" in pod_names
+        assert "pipeline-test-id-impl-bbb" in pod_names
+        assert "unrelated-pod" not in pod_names
+
 
 # ---------------------------------------------------------------------------
 # cmd_artifacts (no S3 configured)
