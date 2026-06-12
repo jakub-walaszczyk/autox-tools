@@ -786,7 +786,7 @@ delete_olm_resources "opendatahub-operators" "rhoai-operator-dev" "opendatahub-o
 delete_olm_resources "redhat-ods-operator" "rhoai-operator-dev" "rhods-operator"
 
 if [ ${INSTALLATION_TYPE} == "operator" ]; then
-    oc delete -f utils/${INSTALLATION_TYPE}-catalogsource.yaml -n ${OPENSHIFT_MARKETPLACE_NAMESPACE} --ignore-not-found
+    oc delete -f $BASE_DIR/utils/${INSTALLATION_TYPE}-catalogsource.yaml -n ${OPENSHIFT_MARKETPLACE_NAMESPACE} --ignore-not-found
 elif [ ${INSTALLATION_TYPE} == "addon" ]; then
     oc delete -f ${INSTALLATION_TYPE} --ignore-not-found
 elif [ ${INSTALLATION_TYPE} == "gitops-cli-dependencies" ]; then
