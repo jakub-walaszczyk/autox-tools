@@ -338,9 +338,9 @@ def cmd_partitions(client: MilvusClient, args: argparse.Namespace) -> None:
 # CLI wiring
 # ---------------------------------------------------------------------------
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_parser(prog: str = "milvus") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="milvus",
+        prog=prog,
         description="Manage remote Milvus vector database instances.",
     )
     parser.add_argument("--json", action="store_true", help="Output as JSON")
@@ -402,8 +402,8 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    parser = _build_parser()
+def main(prog: str = "milvus") -> None:
+    parser = _build_parser(prog=prog)
     args = parser.parse_args()
     client = connect()
 
