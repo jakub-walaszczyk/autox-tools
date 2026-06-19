@@ -24,7 +24,7 @@ The tool uses `python-dotenv` and walks up the directory tree to find the neares
 ### Verify connectivity
 
 ```bash
-uv run milvus health
+uv run vs milvus health
 ```
 
 ## Commands
@@ -36,9 +36,9 @@ All commands accept a global `--json` flag for machine-readable output (useful f
 #### `list` -- List all collections
 
 ```bash
-uv run milvus list              # Names only (fast)
-uv run milvus list --counts     # Include row counts per collection
-uv run milvus --json list       # JSON output
+uv run vs milvus list              # Names only (fast)
+uv run vs milvus list --counts     # Include row counts per collection
+uv run vs milvus --json list       # JSON output
 ```
 
 #### `describe` -- Show full collection details
@@ -46,7 +46,7 @@ uv run milvus --json list       # JSON output
 Prints schema (fields, types, primary key), indexes, partitions, and row count.
 
 ```bash
-uv run milvus describe my_collection
+uv run vs milvus describe my_collection
 ```
 
 #### `count` -- Row count dashboard
@@ -54,14 +54,14 @@ uv run milvus describe my_collection
 Tabular view of row counts across all or filtered collections.
 
 ```bash
-uv run milvus count                # All collections
-uv run milvus count "embed_.*"     # Only collections matching a regex
+uv run vs milvus count                # All collections
+uv run vs milvus count "embed_.*"     # Only collections matching a regex
 ```
 
 #### `partitions` -- List partitions
 
 ```bash
-uv run milvus partitions my_collection
+uv run vs milvus partitions my_collection
 ```
 
 ### Data operations
@@ -71,9 +71,9 @@ uv run milvus partitions my_collection
 Execute a Milvus [filter expression](https://milvus.io/docs/boolean.md) and inspect rows without writing Python. Vector fields are summarized as `[N dims]` in human-readable output.
 
 ```bash
-uv run milvus query my_collection 'id > 100'
-uv run milvus query my_collection 'status == "active"' --output-fields name,score --limit 50
-uv run milvus --json query my_collection 'id > 0' --limit 5
+uv run vs milvus query my_collection 'id > 100'
+uv run vs milvus query my_collection 'status == "active"' --output-fields name,score --limit 50
+uv run vs milvus --json query my_collection 'id > 0' --limit 5
 ```
 
 #### `export` -- Export data to JSONL
@@ -81,9 +81,9 @@ uv run milvus --json query my_collection 'id > 0' --limit 5
 Dump collection data to a JSONL file for backup, offline inspection, or migration. Fetches in batches of 1000 internally.
 
 ```bash
-uv run milvus export my_collection                          # All rows (up to 10k) -> my_collection.jsonl
-uv run milvus export my_collection --filter 'score > 0.8'   # Filtered subset
-uv run milvus export my_collection --limit 500 -o out.jsonl  # Custom limit and path
+uv run vs milvus export my_collection                          # All rows (up to 10k) -> my_collection.jsonl
+uv run vs milvus export my_collection --filter 'score > 0.8'   # Filtered subset
+uv run vs milvus export my_collection --limit 500 -o out.jsonl  # Custom limit and path
 ```
 
 ### Collection management
@@ -93,15 +93,15 @@ uv run milvus export my_collection --limit 500 -o out.jsonl  # Custom limit and 
 Matches collection names by prefix or full regex. Requires interactive confirmation unless `--yes` is passed.
 
 ```bash
-uv run milvus drop "test_.*"              # Preview + confirm
-uv run milvus drop "test_.*" --dry-run    # Preview only, no action
-uv run milvus drop "test_.*" --yes        # Skip confirmation (CI use)
+uv run vs milvus drop "test_.*"              # Preview + confirm
+uv run vs milvus drop "test_.*" --dry-run    # Preview only, no action
+uv run vs milvus drop "test_.*" --yes        # Skip confirmation (CI use)
 ```
 
 #### `rename` -- Rename a collection
 
 ```bash
-uv run milvus rename old_name new_name
+uv run vs milvus rename old_name new_name
 ```
 
 ### Operational maintenance
@@ -111,7 +111,7 @@ uv run milvus rename old_name new_name
 Forces pending inserts/upserts to be written to storage. Useful before taking a backup or running an export.
 
 ```bash
-uv run milvus flush my_collection
+uv run vs milvus flush my_collection
 ```
 
 #### `compact` -- Trigger compaction
@@ -119,7 +119,7 @@ uv run milvus flush my_collection
 Reclaims storage space after bulk deletes by rewriting segment files.
 
 ```bash
-uv run milvus compact my_collection
+uv run vs milvus compact my_collection
 ```
 
 #### `health` -- Connection check and summary
@@ -127,7 +127,7 @@ uv run milvus compact my_collection
 Quick connectivity test that also reports total collections and row count.
 
 ```bash
-uv run milvus health
+uv run vs milvus health
 ```
 
 ## JSON output
@@ -135,17 +135,17 @@ uv run milvus health
 Every command supports `--json` as a global flag (placed before the subcommand):
 
 ```bash
-uv run milvus --json list --counts
-uv run milvus --json describe my_collection
-uv run milvus --json count "embed_.*"
-uv run milvus --json health
+uv run vs milvus --json list --counts
+uv run vs milvus --json describe my_collection
+uv run vs milvus --json count "embed_.*"
+uv run vs milvus --json health
 ```
 
 This makes it straightforward to pipe into `jq`, feed into monitoring scripts, or integrate with other tooling:
 
 ```bash
 # Get names of collections with more than 1M rows
-uv run milvus --json count | jq -r '.collections[] | select(.row_count > 1000000) | .name'
+uv run vs milvus --json count | jq -r '.collections[] | select(.row_count > 1000000) | .name'
 ```
 
 ## Architecture
@@ -157,9 +157,9 @@ autox_tools/milvus/
   cli.py         # argparse CLI with all subcommands
 ```
 
-The tool is registered as a `uv`-runnable entry point in `pyproject.toml`:
+The tool is accessible via the unified vector store entry point in `pyproject.toml`:
 
 ```toml
 [project.scripts]
-milvus = "autox_tools.milvus.cli:main"
+vs = "autox_tools.vs.cli:main"
 ```

@@ -463,10 +463,10 @@ class TestCmdProviders:
 
 
 # ---------------------------------------------------------------------------
-# cmd_stores tests
+# cmd_vs_list tests
 # ---------------------------------------------------------------------------
 
-class TestCmdStores:
+class TestCmdVsList:
     def test_list_stores(self, capsys: pytest.CaptureFixture[str]):
         stores = [
             _make_vector_store("vs_1", "product-docs", "completed", 42, 134_742_016),
@@ -475,7 +475,7 @@ class TestCmdStores:
         client = MagicMock()
         client.vector_stores.list.return_value = SimpleNamespace(data=stores)
 
-        cli.cmd_stores(client, _args(command="stores"))
+        cli.cmd_vs_list(client, _args(command="vs"))
 
         out = capsys.readouterr().out
         assert "product-docs" in out
@@ -488,7 +488,7 @@ class TestCmdStores:
         client = MagicMock()
         client.vector_stores.list.return_value = SimpleNamespace(data=[])
 
-        cli.cmd_stores(client, _args(command="stores"))
+        cli.cmd_vs_list(client, _args(command="vs"))
 
         out = capsys.readouterr().out
         assert "No vector stores found." in out
@@ -498,12 +498,126 @@ class TestCmdStores:
         client = MagicMock()
         client.vector_stores.list.return_value = SimpleNamespace(data=stores)
 
-        cli.cmd_stores(client, _args(command="stores", json=True))
+        cli.cmd_vs_list(client, _args(command="vs", json=True))
 
         data = json.loads(capsys.readouterr().out)
         assert data["total"] == 1
         assert data["vector_stores"][0]["name"] == "product-docs"
         assert data["vector_stores"][0]["usage_bytes"] == 1_048_576
+
+
+# ---------------------------------------------------------------------------
+# cmd_vs_delete tests
+# ---------------------------------------------------------------------------
+
+class TestCmdVsDelete:
+    def test_delete_by_pattern(self, capsys: pytest.CaptureFixture[str]):
+        stores = [
+            _make_vector_store("vs_1", "test-store-1", "completed"),
+            _make_vector_store("vs_2", "test-store-2", "completed"),
+            _make_vector_store("vs_3", "prod-store", "completed"),
+        ]
+        client = MagicMock()
+        client.vector_stores.list.return_value = SimpleNamespace(data=stores)
+
+        cli.cmd_vs_delete(client, _args(
+            command="vs", vs_command="delete",
+            pattern="test-store", all=False, yes=True, dry_run=False,
+        ))
+
+        out = capsys.readouterr().out
+        assert "test-store-1" in out
+        assert "test-store-2" in out
+        assert "prod-store" not in out
+        assert "2 vector store(s) deleted" in out
+        assert client.vector_stores.delete.call_count == 2
+
+    def test_delete_all(self, capsys: pytest.CaptureFixture[str]):
+        stores = [
+            _make_vector_store("vs_1", "store-a", "completed"),
+            _make_vector_store("vs_2", "store-b", "completed"),
+        ]
+        client = MagicMock()
+        client.vector_stores.list.return_value = SimpleNamespace(data=stores)
+
+        cli.cmd_vs_delete(client, _args(
+            command="vs", vs_command="delete",
+            pattern=None, all=True, yes=True, dry_run=False,
+        ))
+
+        out = capsys.readouterr().out
+        assert "2 vector store(s) deleted" in out
+        assert client.vector_stores.delete.call_count == 2
+
+    def test_delete_dry_run(self, capsys: pytest.CaptureFixture[str]):
+        stores = [_make_vector_store("vs_1", "test-store", "completed")]
+        client = MagicMock()
+        client.vector_stores.list.return_value = SimpleNamespace(data=stores)
+
+        cli.cmd_vs_delete(client, _args(
+            command="vs", vs_command="delete",
+            pattern="test", all=False, yes=False, dry_run=True,
+        ))
+
+        out = capsys.readouterr().out
+        assert "Would delete" in out
+        assert client.vector_stores.delete.call_count == 0
+
+    def test_delete_no_match(self, capsys: pytest.CaptureFixture[str]):
+        stores = [_make_vector_store("vs_1", "prod-store", "completed")]
+        client = MagicMock()
+        client.vector_stores.list.return_value = SimpleNamespace(data=stores)
+
+        cli.cmd_vs_delete(client, _args(
+            command="vs", vs_command="delete",
+            pattern="nonexistent", all=False, yes=True, dry_run=False,
+        ))
+
+        out = capsys.readouterr().out
+        assert "No vector stores matching" in out
+
+    def test_delete_no_pattern_no_all_exits(self):
+        client = MagicMock()
+        client.vector_stores.list.return_value = SimpleNamespace(data=[])
+
+        with pytest.raises(SystemExit, match="Provide a name/ID pattern"):
+            cli.cmd_vs_delete(client, _args(
+                command="vs", vs_command="delete",
+                pattern=None, all=False, yes=True, dry_run=False,
+            ))
+
+    def test_delete_error_handling(self, capsys: pytest.CaptureFixture[str]):
+        stores = [
+            _make_vector_store("vs_1", "store-a", "completed"),
+            _make_vector_store("vs_2", "store-b", "completed"),
+        ]
+        client = MagicMock()
+        client.vector_stores.list.return_value = SimpleNamespace(data=stores)
+        client.vector_stores.delete.side_effect = [None, RuntimeError("API error")]
+
+        cli.cmd_vs_delete(client, _args(
+            command="vs", vs_command="delete",
+            pattern=None, all=True, yes=True, dry_run=False,
+        ))
+
+        captured = capsys.readouterr()
+        assert "Deleted: store-a" in captured.out
+        assert "Failed to delete" in captured.err
+        assert "1 vector store(s) deleted" in captured.out
+
+    def test_delete_json_not_applicable(self, capsys: pytest.CaptureFixture[str]):
+        """Delete uses human output; JSON flag applies to listing only."""
+        stores = [_make_vector_store("vs_1", "test-store", "completed")]
+        client = MagicMock()
+        client.vector_stores.list.return_value = SimpleNamespace(data=stores)
+
+        cli.cmd_vs_delete(client, _args(
+            command="vs", vs_command="delete",
+            pattern="test", all=False, yes=True, dry_run=False, json=True,
+        ))
+
+        out = capsys.readouterr().out
+        assert "Deleted" in out
 
 
 # ---------------------------------------------------------------------------
@@ -934,9 +1048,29 @@ class TestParser:
         args = cli._build_parser().parse_args(["health"])
         assert args.command == "health"
 
-    def test_stores_no_args(self):
-        args = cli._build_parser().parse_args(["stores"])
-        assert args.command == "stores"
+    def test_vs_list(self):
+        args = cli._build_parser().parse_args(["vs", "list"])
+        assert args.command == "vs"
+        assert args.vs_command == "list"
+
+    def test_vs_no_subcommand(self):
+        args = cli._build_parser().parse_args(["vs"])
+        assert args.command == "vs"
+        assert args.vs_command is None
+
+    def test_vs_delete(self):
+        args = cli._build_parser().parse_args(["vs", "delete", "test-store", "--yes", "--dry-run"])
+        assert args.command == "vs"
+        assert args.vs_command == "delete"
+        assert args.pattern == "test-store"
+        assert args.yes is True
+        assert args.dry_run is True
+
+    def test_vs_delete_all(self):
+        args = cli._build_parser().parse_args(["vs", "delete", "--all", "-y"])
+        assert args.command == "vs"
+        assert args.vs_command == "delete"
+        assert args.all is True
 
     def test_providers_no_args(self):
         args = cli._build_parser().parse_args(["providers"])

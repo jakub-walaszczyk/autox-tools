@@ -48,11 +48,24 @@ uv run ogx providers                  # filtered to vector store providers
 uv run ogx --json providers           # JSON output
 ```
 
-### `stores` -- List registered vector stores
+### `vs` -- Manage registered vector stores
+
+List all registered vector stores:
 
 ```bash
-uv run ogx stores                     # all vector stores with metadata
-uv run ogx --json stores              # JSON output
+uv run ogx vs                         # list all (default action)
+uv run ogx vs list                    # explicit list
+uv run ogx --json vs list             # JSON output
+```
+
+Delete vector stores by name/ID pattern or all at once:
+
+```bash
+uv run ogx vs delete "test-store.*"          # delete matching stores (interactive confirm)
+uv run ogx vs delete "test-store.*" --yes    # skip confirmation
+uv run ogx vs delete --all                   # delete all stores (interactive confirm)
+uv run ogx vs delete --all --yes             # delete all, skip confirmation
+uv run ogx vs delete "test.*" --dry-run      # preview what would be deleted
 ```
 
 ### `health` -- Check gateway health

@@ -5,7 +5,8 @@ Usage::
     uv run ogx models [--type {all,llm,embedding,rerank}] [--metadata] [--json]
     uv run ogx info <model-id> [--json]
     uv run ogx providers [--json]
-    uv run ogx stores [--json]
+    uv run ogx vs [list] [--json]
+    uv run ogx vs delete [pattern] [--all] [--yes] [--dry-run] [--json]
     uv run ogx health [--json]
     uv run ogx check [model-id] [--type {all,llm,embedding,rerank}] [--prompt TEXT] [--input TEXT] [--json]
 """
@@ -14,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -271,7 +273,22 @@ def cmd_providers(client: OgxClient, args: argparse.Namespace) -> None:
     print(f"\n  {len(providers)} provider(s)")
 
 
-def cmd_stores(client: OgxClient, args: argparse.Namespace) -> None:
+def _match_stores(stores: list, pattern: str) -> list:
+    """Return stores whose name or ID matches *pattern* as a prefix or regex."""
+    try:
+        regex = re.compile(pattern)
+    except re.error:
+        regex = re.compile(re.escape(pattern))
+    matched = []
+    for vs in stores:
+        name = getattr(vs, "name", "") or ""
+        sid = getattr(vs, "id", "") or ""
+        if regex.fullmatch(name) or name.startswith(pattern) or regex.fullmatch(sid) or sid.startswith(pattern):
+            matched.append(vs)
+    return matched
+
+
+def cmd_vs_list(client: OgxClient, args: argparse.Namespace) -> None:
     """List registered vector stores."""
     response = client.vector_stores.list()
     stores = sorted(response.data, key=lambda vs: vs.name or vs.id)
@@ -331,6 +348,54 @@ def cmd_stores(client: OgxClient, args: argparse.Namespace) -> None:
         )
 
     print(f"\n  {len(stores)} vector store(s)")
+
+
+def cmd_vs_delete(client: OgxClient, args: argparse.Namespace) -> None:
+    """Delete vector stores by pattern or all."""
+    response = client.vector_stores.list()
+    stores = sorted(response.data, key=lambda vs: vs.name or vs.id)
+
+    if args.all:
+        matched = stores
+    elif args.pattern:
+        matched = _match_stores(stores, args.pattern)
+    else:
+        sys.exit("Provide a name/ID pattern or --all to select stores for deletion.")
+
+    if not matched:
+        if args.pattern:
+            print(f"No vector stores matching '{args.pattern}'.")
+        else:
+            print("No vector stores found.")
+        return
+
+    label = "Would delete" if args.dry_run else "About to delete"
+    scope = "all" if args.all else f"matching '{args.pattern}'"
+    print(f"{label} {len(matched)} vector store(s) ({scope}):")
+    for vs in matched:
+        name = vs.name or "—"
+        print(f"  - {name}  (id={vs.id})")
+
+    if args.dry_run:
+        return
+
+    if not args.yes:
+        answer = input("\nConfirm? [y/N] ").strip().lower()
+        if answer != "y":
+            print("Aborted.")
+            return
+
+    deleted = 0
+    for vs in matched:
+        try:
+            client.vector_stores.delete(vs.id)
+            name = vs.name or vs.id
+            print(f"  Deleted: {name}")
+            deleted += 1
+        except Exception as exc:
+            print(f"  Failed to delete '{vs.name or vs.id}': {exc}", file=sys.stderr)
+
+    print(f"\n{deleted} vector store(s) deleted.")
 
 
 def cmd_health(client: OgxClient, args: argparse.Namespace) -> None:
@@ -453,9 +518,12 @@ def _print_check_summary(results: list[dict[str, object]]) -> None:
         elif r["status"] == "skipped":
             detail = str(r.get("message", ""))
 
+        mid = r["model_id"]
+        mtype = r["model_type"]
+        prov = r["provider_id"]
         print(
-            f"  {str(r['model_id']):<{max_id}}   {str(r['model_type']):<{max_type}}"
-            f"   {str(r['provider_id']):<{max_prov}}   {status:<7}   {detail}"
+            f"  {mid!s:<{max_id}}   {mtype!s:<{max_type}}"
+            f"   {prov!s:<{max_prov}}   {status:<7}   {detail}"
         )
 
     passed = sum(1 for r in results if r["status"] == "pass")
@@ -557,8 +625,15 @@ def _build_parser() -> argparse.ArgumentParser:
     # providers
     sub.add_parser("providers", help="List vector store providers")
 
-    # stores
-    sub.add_parser("stores", help="List registered vector stores")
+    # vs (vector store lifecycle management)
+    vs_parser = sub.add_parser("vs", help="Manage registered vector stores")
+    vs_sub = vs_parser.add_subparsers(dest="vs_command")
+    vs_sub.add_parser("list", help="List registered vector stores")
+    vs_del = vs_sub.add_parser("delete", help="Delete vector stores")
+    vs_del.add_argument("pattern", nargs="?", default=None, help="Name or ID pattern to match")
+    vs_del.add_argument("--all", action="store_true", help="Delete all vector stores")
+    vs_del.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
+    vs_del.add_argument("--dry-run", action="store_true", help="Show what would be deleted without acting")
 
     # health
     sub.add_parser("health", help="Check OGX gateway health and version")
@@ -591,11 +666,18 @@ def main() -> None:
     args = parser.parse_args()
     client = connect()
 
+    if args.command == "vs":
+        vs_cmd = getattr(args, "vs_command", None)
+        if vs_cmd == "delete":
+            cmd_vs_delete(client, args)
+        else:
+            cmd_vs_list(client, args)
+        return
+
     commands = {
         "models": cmd_models,
         "info": cmd_info,
         "providers": cmd_providers,
-        "stores": cmd_stores,
         "health": cmd_health,
         "check": cmd_check,
     }
