@@ -896,13 +896,22 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     parser = _build_parser()
+
+    from autox_tools.config._loader import add_profile_args, resolve
+    add_profile_args(parser)
+
     args = parser.parse_args()
+    rhoai_cfg = resolve("rhoai", args)
+    s3_cfg = resolve("artifacts_s3", args)
+
+    if not getattr(args, "bucket", None) and s3_cfg and s3_cfg.bucket:
+        args.bucket = s3_cfg.bucket
 
     from autox_tools.pipelines._artifacts_s3 import connect as s3_connect
     from autox_tools.pipelines._kfp import connect as kfp_connect
 
-    kfp_client = kfp_connect()
-    s3_client = s3_connect()
+    kfp_client = kfp_connect(rhoai_cfg)
+    s3_client = s3_connect(s3_cfg)
 
     commands: dict[str, Any] = {
         "results": cmd_results,

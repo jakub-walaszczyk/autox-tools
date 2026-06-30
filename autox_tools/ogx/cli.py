@@ -663,8 +663,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     parser = _build_parser()
+
+    from autox_tools.config._loader import add_profile_args, resolve
+    add_profile_args(parser, target=True)
+
     args = parser.parse_args()
-    client = connect()
+    cfg = resolve("ogx", args)
+    client = connect(cfg)
 
     if args.command == "vs":
         vs_cmd = getattr(args, "vs_command", None)

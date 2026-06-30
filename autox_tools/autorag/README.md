@@ -4,9 +4,24 @@ Fetch, display, compare, and export AutoRAG experiment results by KFP run ID. Br
 
 ## Setup
 
-The tool requires both KFP and artifacts S3 credentials. Set them via environment variables or a `.env` file in the project root.
+### Profile-based configuration (recommended)
 
-### Required variables
+Define named RHOAI and artifacts S3 configs in `.autox.yaml` and select them via profile:
+
+```bash
+uv run autorag -p dev results <run-id>
+uv run autorag -p staging compare <run-id-1> <run-id-2>
+```
+
+Since `autorag` uses multiple services (KFP for run metadata, artifacts S3 for results), it accepts `--profile/-p` to resolve all services at once. The `--target/-t` flag is not available -- use profiles instead.
+
+See the [main README](../../README.md#configuration) for full details on `.autox.yaml` profiles and resolution order.
+
+### Environment variables
+
+Alternatively, the tool reads KFP and artifacts S3 credentials from environment variables or a `.env` file in the project root.
+
+#### Required variables
 
 | Variable | Description |
 |---|---|
@@ -17,7 +32,7 @@ The tool requires both KFP and artifacts S3 credentials. Set them via environmen
 | `ARTIFACTS_AWS_ACCESS_KEY_ID` | Artifacts S3 access key |
 | `ARTIFACTS_AWS_SECRET_ACCESS_KEY` | Artifacts S3 secret key |
 
-### Optional variables
+#### Optional variables
 
 | Variable | Default | Description |
 |---|---|---|

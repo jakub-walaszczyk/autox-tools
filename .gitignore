@@ -39,6 +39,7 @@ coverage.xml
 .env
 .env.*
 !.env.example
+.autox.yaml
 *.pem
 *.key
 

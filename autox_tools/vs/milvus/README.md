@@ -4,9 +4,31 @@ Command-line tool for managing remote Milvus vector database instances. Covers c
 
 ## Setup
 
+### Profile-based configuration (recommended)
+
+Define named Milvus configs under the `vs.milvus` section in `.autox.yaml`:
+
+```yaml
+vs:
+  milvus:
+    local-milvus:
+      host: milvus.apps.dev-cluster.example.com
+      port: 19530
+      secure: false
+```
+
+Then select them via CLI flags:
+
+```bash
+uv run vs milvus -p dev health                   # use the "dev" profile
+uv run vs milvus -t local-milvus list             # target a named config directly
+```
+
+See the [main README](../../../README.md#configuration) for full details on `.autox.yaml` profiles and resolution order. Run `uv run config init` to generate a starter config.
+
 ### Environment variables
 
-Create a `.env` file in the project root or export the variables directly:
+Alternatively, create a `.env` file in the project root or export the variables directly:
 
 ```bash
 # Required
@@ -19,7 +41,7 @@ MILVUS_PASSWORD=Milvus       # Authentication password
 MILVUS_SECURE=false          # Set to "true" to enable TLS
 ```
 
-The tool uses `python-dotenv` and walks up the directory tree to find the nearest `.env` file, so a single file at the repo root covers all invocations.
+This path is used automatically when no `.autox.yaml` is present or no profile/target is specified.
 
 ### Verify connectivity
 
@@ -29,7 +51,7 @@ uv run vs milvus health
 
 ## Commands
 
-All commands accept a global `--json` flag for machine-readable output (useful for piping into `jq` or scripting).
+All commands accept a global `--json` flag for machine-readable output (useful for piping into `jq` or scripting). Use `--profile/-p` or `--target/-t` to select a config from `.autox.yaml`.
 
 ### Collection inspection
 
@@ -151,9 +173,9 @@ uv run vs milvus --json count | jq -r '.collections[] | select(.row_count > 1000
 ## Architecture
 
 ```
-autox_tools/milvus/
+autox_tools/vs/milvus/
   __init__.py    # Package marker
-  _client.py     # Connection factory -- reads env vars, validates, returns MilvusClient
+  _client.py     # Connection factory (config or env vars -> MilvusClient)
   cli.py         # argparse CLI with all subcommands
 ```
 

@@ -4,9 +4,22 @@ Monitor, inspect, debug, and launch Kubeflow Pipeline runs on OpenShift AI. Prov
 
 ## Setup
 
+### Profile-based configuration (recommended)
+
+Define named RHOAI and S3 configs in `.autox.yaml` and select them via profile:
+
+```bash
+uv run pipelines -p dev list --limit 5
+uv run pipelines -p staging status <run-id>
+```
+
+Since `pipelines` uses multiple services (KFP, K8S, artifacts S3), it accepts `--profile/-p` to resolve all services at once. The `--target/-t` flag is not available -- use profiles instead.
+
+See the [main README](../../README.md#configuration) for full details on `.autox.yaml` profiles and resolution order. Run `uv run config init` to generate a starter config.
+
 ### Environment variables
 
-Create a `.env` file in the project root or export the variables directly:
+Alternatively, create a `.env` file in the project root or export the variables directly:
 
 ```bash
 # Required -- KFP connection
@@ -208,16 +221,16 @@ uv run pipelines artifacts <run-id> --component search-space-optimization --down
 
 For AutoRAG-specific artifact browsing (RAG pattern discovery, per-pattern downloads, artifact content printing), use the [`autorag artifacts`](../autorag/README.md) command instead.
 
-Requires artifacts S3 credentials (`ARTIFACTS_AWS_S3_ENDPOINT`, `ARTIFACTS_AWS_ACCESS_KEY_ID`, `ARTIFACTS_AWS_SECRET_ACCESS_KEY`). Without them, only artifact references are shown. These are separate from the `AWS_*` credentials used by the `s3` tool for data storage.
+Requires artifacts S3 credentials -- either via an `artifacts_s3` mapping in your `.autox.yaml` profile, or `ARTIFACTS_AWS_*` environment variables. Without them, only artifact references are shown. These credentials are separate from the data-storage S3 used by the `s3` tool.
 
 ## Architecture
 
 ```
 autox_tools/pipelines/
     __init__.py        Package marker
-    _kfp.py            KFP client factory (env vars -> kfp.Client)
+    _kfp.py            KFP client factory (config or env vars -> kfp.Client)
     _k8s.py            Kubernetes client factory with OCP/ROSA API URL derivation
-    _artifacts_s3.py   S3 client factory for pipeline artifacts (ARTIFACTS_AWS_* env vars)
+    _artifacts_s3.py   S3 client factory for pipeline artifacts
     _filters.py        Task noise filtering (hides KFP/Argo scaffolding)
     cli.py             argparse entry point and subcommands
     README.md          This file

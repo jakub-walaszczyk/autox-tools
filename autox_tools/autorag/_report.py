@@ -12,7 +12,7 @@ from __future__ import annotations
 import sys
 from typing import Any
 
-from autox_tools.autorag._display import format_duration, is_lower_better
+from autox_tools.autorag._display import filter_metric_names, format_duration, is_lower_better
 from autox_tools.autorag._patterns import PatternMetrics, RunPatternData, natural_sort_key
 
 try:
@@ -247,7 +247,9 @@ def _plot_metrics_with_ci(
     names: list[str],
 ) -> None:
     """Plot all metrics across iterations with optional CI shading."""
-    all_metrics = sorted({m for p in ordered for m in p.metrics})
+    all_metrics = filter_metric_names(
+        sorted({m for p in ordered for m in p.metrics})
+    )
     if not all_metrics:
         return
 
@@ -500,10 +502,10 @@ def _render_comparison_charts(
     label2: str,
 ) -> None:
     """Render comparison charts: convergence + one page per metric pair."""
-    shared_metrics = sorted(
+    shared_metrics = filter_metric_names(sorted(
         {m for p in data1.patterns for m in p.metrics}
         & {m for p in data2.patterns for m in p.metrics},
-    )
+    ))
 
     plots: list[Any] = []
     plots.append(

@@ -1,6 +1,9 @@
-"""PostgreSQL/pgvector connection factory driven by environment variables.
+"""PostgreSQL/pgvector connection factory.
 
-Required env vars (or .env file):
+Accepts an optional ``PgvectorConfig`` for profile-based configuration.
+Falls back to environment variables when no config is provided.
+
+Required env vars (or .env file) for the fallback path:
     PGVECTOR_HOST     -- server hostname or IP (e.g. "localhost")
     PGVECTOR_PORT     -- PostgreSQL port (e.g. "5432")
     PGVECTOR_DATABASE -- database name
@@ -15,15 +18,30 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import TYPE_CHECKING
 
 from dotenv import find_dotenv, load_dotenv
 from psycopg import Connection
 
+if TYPE_CHECKING:
+    from autox_tools.config._models import PgvectorConfig
+
 _REQUIRED_VARS = ("PGVECTOR_HOST", "PGVECTOR_PORT", "PGVECTOR_DATABASE")
 
 
-def connect() -> Connection:
-    """Build a ``psycopg.Connection`` from environment configuration."""
+def connect(cfg: PgvectorConfig | None = None) -> Connection:
+    """Build a ``psycopg.Connection`` from *cfg* or environment variables."""
+    if cfg is not None:
+        return Connection.connect(
+            host=cfg.host,
+            port=cfg.port,
+            dbname=cfg.database,
+            user=cfg.user,
+            password=cfg.password,
+            sslmode=cfg.sslmode,
+            autocommit=True,
+        )
+
     load_dotenv(find_dotenv(usecwd=True))
 
     missing = [v for v in _REQUIRED_VARS if not os.getenv(v)]

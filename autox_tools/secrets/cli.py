@@ -479,9 +479,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     parser = _build_parser()
-    args = parser.parse_args()
 
-    api = connect()
+    from autox_tools.config._loader import add_profile_args, resolve
+    add_profile_args(parser)
+
+    args = parser.parse_args()
+    rhoai_cfg = resolve("rhoai", args)
+    api = connect(rhoai_cfg)
     namespace = _resolve_namespace(args)
 
     commands: dict[str, Any] = {

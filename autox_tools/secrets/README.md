@@ -4,7 +4,22 @@ Manage Kubernetes Opaque secrets on OpenShift AI clusters. List, decode, create,
 
 ## Setup
 
-The secrets tool reuses the same authentication and cluster variables as the `pipelines` tool. No additional environment variables are required.
+### Profile-based configuration (recommended)
+
+Define named RHOAI configs in `.autox.yaml` and select them via profile:
+
+```bash
+uv run secrets -p dev list
+uv run secrets -p staging reveal my-secret
+```
+
+Since `secrets` uses the RHOAI cluster connection, it accepts `--profile/-p` to resolve the cluster config. The `--target/-t` flag is not available -- use profiles instead.
+
+See the [main README](../../README.md#configuration) for full details on `.autox.yaml` profiles and resolution order.
+
+### Environment variables
+
+Alternatively, the secrets tool reuses the same authentication and cluster variables as the `pipelines` tool. No additional environment variables are required.
 
 | Variable | Required | Description |
 |---|---|---|
@@ -117,7 +132,7 @@ uv run secrets edit db-creds --set key=value -y
 ```
 autox_tools/secrets/
   __init__.py       # Package marker
-  _client.py        # K8S CoreV1Api factory (env vars -> authenticated client)
+  _client.py        # K8S CoreV1Api factory (config or env vars -> authenticated client)
   cli.py            # argparse entry point and subcommands
   README.md         # This file
 ```

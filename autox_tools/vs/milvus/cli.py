@@ -23,7 +23,7 @@ import re
 import sys
 from typing import TYPE_CHECKING
 
-from autox_tools.milvus._client import connect
+from autox_tools.vs.milvus._client import connect
 
 if TYPE_CHECKING:
     from pymilvus import MilvusClient
@@ -404,8 +404,13 @@ def _build_parser(prog: str = "milvus") -> argparse.ArgumentParser:
 
 def main(prog: str = "milvus") -> None:
     parser = _build_parser(prog=prog)
+
+    from autox_tools.config._loader import add_profile_args, resolve
+    add_profile_args(parser, target=True)
+
     args = parser.parse_args()
-    client = connect()
+    cfg = resolve("milvus", args)
+    client = connect(cfg)
 
     commands = {
         "list": cmd_list,

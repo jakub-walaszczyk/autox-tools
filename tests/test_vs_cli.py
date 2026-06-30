@@ -12,14 +12,18 @@ from autox_tools.vs import cli
 
 class TestDispatcher:
     def test_unknown_backend_exits(self):
-        with patch.object(sys, "argv", ["vs", "nonexistent"]):
-            with pytest.raises(SystemExit, match="Unknown backend"):
-                cli.main()
+        with (
+            patch.object(sys, "argv", ["vs", "nonexistent"]),
+            pytest.raises(SystemExit, match="Unknown backend"),
+        ):
+            cli.main()
 
     def test_no_args_exits(self):
-        with patch.object(sys, "argv", ["vs"]):
-            with pytest.raises(SystemExit):
-                cli.main()
+        with (
+            patch.object(sys, "argv", ["vs"]),
+            pytest.raises(SystemExit),
+        ):
+            cli.main()
 
     def test_help_flag(self, capsys: pytest.CaptureFixture[str]):
         with patch.object(sys, "argv", ["vs", "--help"]):
@@ -31,7 +35,7 @@ class TestDispatcher:
     def test_routes_to_milvus(self):
         with (
             patch.object(sys, "argv", ["vs", "milvus", "--help"]),
-            patch("autox_tools.milvus.cli.main") as mock_main,
+            patch("autox_tools.vs.milvus.cli.main") as mock_main,
         ):
             mock_main.side_effect = SystemExit(0)
             with pytest.raises(SystemExit):
@@ -41,7 +45,7 @@ class TestDispatcher:
     def test_routes_to_pgvector(self):
         with (
             patch.object(sys, "argv", ["vs", "pgvector", "--help"]),
-            patch("autox_tools.pgvector.cli.main") as mock_main,
+            patch("autox_tools.vs.pgvector.cli.main") as mock_main,
         ):
             mock_main.side_effect = SystemExit(0)
             with pytest.raises(SystemExit):
@@ -56,7 +60,7 @@ class TestDispatcher:
 
         with (
             patch.object(sys, "argv", ["vs", "pgvector", "health", "--json"]),
-            patch("autox_tools.pgvector.cli.main", side_effect=capture_main),
+            patch("autox_tools.vs.pgvector.cli.main", side_effect=capture_main),
         ):
             cli.main()
         assert captured_argv == ["vs pgvector", "health", "--json"]

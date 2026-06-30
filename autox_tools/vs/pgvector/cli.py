@@ -22,7 +22,7 @@ import re
 import sys
 from typing import TYPE_CHECKING
 
-from autox_tools.pgvector._client import connect
+from autox_tools.vs.pgvector._client import connect
 
 if TYPE_CHECKING:
     from psycopg import Connection
@@ -464,8 +464,13 @@ def _build_parser(prog: str = "pgvector") -> argparse.ArgumentParser:
 
 def main(prog: str = "pgvector") -> None:
     parser = _build_parser(prog=prog)
+
+    from autox_tools.config._loader import add_profile_args, resolve
+    add_profile_args(parser, target=True)
+
     args = parser.parse_args()
-    conn = connect()
+    cfg = resolve("pgvector", args)
+    conn = connect(cfg)
 
     commands = {
         "list": cmd_list,

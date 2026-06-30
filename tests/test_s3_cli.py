@@ -423,7 +423,7 @@ class TestCmdUpload:
 class TestParser:
     def test_list_args(self):
         parser = cli._build_parser()
-        args = parser.parse_args(["--json", "list", "my-bucket", "prefix/", "--recursive", "--limit", "500"])
+        args = parser.parse_args(["--json", "list", "-b", "my-bucket", "prefix/", "--recursive", "--limit", "500"])
         assert args.json is True
         assert args.command == "list"
         assert args.bucket == "my-bucket"
@@ -433,28 +433,68 @@ class TestParser:
 
     def test_tree_args(self):
         parser = cli._build_parser()
-        args = parser.parse_args(["tree", "bucket", "pfx/", "--depth", "5"])
+        args = parser.parse_args(["tree", "-b", "bucket", "pfx/", "--depth", "5"])
         assert args.command == "tree"
+        assert args.prefix == "pfx/"
         assert args.depth == 5
 
     def test_download_args(self):
         parser = cli._build_parser()
-        args = parser.parse_args(["download", "bucket", "pfx/", "-o", "/tmp/out", "--pattern", "*.json"])
+        args = parser.parse_args(["download", "-b", "bucket", "pfx/", "-o", "/tmp/out", "--pattern", "*.json"])
         assert args.command == "download"
+        assert args.bucket == "bucket"
+        assert args.prefix == "pfx/"
         assert args.output == "/tmp/out"
         assert args.pattern == "*.json"
 
     def test_cleanup_args(self):
         parser = cli._build_parser()
-        args = parser.parse_args(["cleanup", "bucket", "pfx/", "--older-than", "30", "--dry-run", "--yes"])
+        args = parser.parse_args(["cleanup", "-b", "bucket", "pfx/", "--older-than", "30", "--dry-run", "--yes"])
         assert args.command == "cleanup"
+        assert args.bucket == "bucket"
+        assert args.prefix == "pfx/"
         assert args.older_than == 30
         assert args.dry_run is True
         assert args.yes is True
 
     def test_upload_args(self):
         parser = cli._build_parser()
-        args = parser.parse_args(["upload", "./dir", "bucket", "pfx/", "--recursive"])
+        args = parser.parse_args(["upload", "./dir", "pfx/", "-b", "bucket", "--recursive"])
         assert args.command == "upload"
         assert args.local_path == "./dir"
+        assert args.bucket == "bucket"
+        assert args.prefix == "pfx/"
         assert args.recursive is True
+
+    def test_list_no_bucket(self):
+        parser = cli._build_parser()
+        args = parser.parse_args(["list"])
+        assert args.command == "list"
+        assert args.bucket is None
+        assert args.prefix == ""
+
+
+class TestResolveBucket:
+    def test_cli_arg_wins(self):
+        from autox_tools.config._models import S3Config
+        args = argparse.Namespace(bucket="cli-bucket")
+        cfg = S3Config(endpoint="x", access_key_id="x", secret_access_key="x", bucket="cfg-bucket")
+        assert cli._resolve_bucket(args, cfg) == "cli-bucket"
+
+    def test_falls_back_to_config(self):
+        from autox_tools.config._models import S3Config
+        args = argparse.Namespace(bucket=None)
+        cfg = S3Config(endpoint="x", access_key_id="x", secret_access_key="x", bucket="cfg-bucket")
+        assert cli._resolve_bucket(args, cfg) == "cfg-bucket"
+
+    def test_exits_when_no_bucket(self):
+        from autox_tools.config._models import S3Config
+        args = argparse.Namespace(bucket=None)
+        cfg = S3Config(endpoint="x", access_key_id="x", secret_access_key="x")
+        with pytest.raises(SystemExit):
+            cli._resolve_bucket(args, cfg)
+
+    def test_exits_when_no_config(self):
+        args = argparse.Namespace(bucket=None)
+        with pytest.raises(SystemExit):
+            cli._resolve_bucket(args, None)
