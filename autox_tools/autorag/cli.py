@@ -602,9 +602,7 @@ def _cmd_artifacts_single_file(
     pattern_name: str,
     args: argparse.Namespace,
 ) -> None:
-    """Handle ``--artifact`` mode: show, download, or print a single file."""
-    from autox_tools.s3.cli import _human_size
-
+    """Handle ``--artifact`` mode: print content to stdout, download, or show JSON metadata."""
     query = args.artifact.lower()
     matches = [
         o for o in objects
@@ -635,11 +633,6 @@ def _cmd_artifacts_single_file(
     size = obj.get("Size", 0)
     filename = os.path.basename(key)
 
-    if args.print_content:
-        response = s3_client.get_object(Bucket=bucket, Key=key)
-        sys.stdout.buffer.write(response["Body"].read())
-        return
-
     if args.json:
         _print_json({
             "pattern": pattern_name,
@@ -649,15 +642,15 @@ def _cmd_artifacts_single_file(
         })
         return
 
-    print(f"Pattern  : {pattern_name}")
-    print(f"Artifact : {filename} ({_human_size(size)})")
-    print(f"S3 key   : {key}")
-
     if args.download:
         local_path = os.path.join(args.download, filename)
         os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
         s3_client.download_file(bucket, key, local_path)
-        print(f"\n  Downloaded to {local_path}")
+        print(f"Downloaded to {local_path}")
+        return
+
+    response = s3_client.get_object(Bucket=bucket, Key=key)
+    sys.stdout.buffer.write(response["Body"].read())
 
 
 def _cmd_artifacts_summary(
@@ -740,9 +733,6 @@ def cmd_artifacts(kfp_client: Any, s3_client: Any, args: argparse.Namespace) -> 
 
     if args.artifact:
         sys.exit("--artifact requires --pattern. Usage: --pattern <name> --artifact <file>")
-
-    if args.print_content:
-        sys.exit("--print requires --pattern and --artifact.")
 
     _cmd_artifacts_summary(s3_client, location.bucket, location.prefix, args)
 
@@ -883,11 +873,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--artifact",
-        help="Artifact filename within a pattern (requires --pattern)",
-    )
-    p.add_argument(
-        "--print", action="store_true", default=False, dest="print_content",
-        help="Output artifact content to stdout (requires --pattern and --artifact)",
+        help="Artifact filename within a pattern (requires --pattern); "
+             "prints content to stdout by default (pipe-friendly)",
     )
     p.add_argument("--download", metavar="DIR", help="Download artifacts to directory")
 

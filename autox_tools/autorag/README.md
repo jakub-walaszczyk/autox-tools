@@ -127,12 +127,9 @@ uv run autorag artifacts <run-id> --pattern all              # List all patterns
 uv run autorag artifacts <run-id> --pattern Pattern1         # Files in Pattern1
 uv run autorag artifacts <run-id> --pattern Pattern1 --download ./out/
 
-# Single artifact from a pattern
+# Print a single artifact to stdout (pipe-friendly)
 uv run autorag artifacts <run-id> --pattern Pattern1 --artifact evaluation_results.json
-
-# Print artifact content to stdout (pipe-friendly)
-uv run autorag artifacts <run-id> --pattern Pattern1 --artifact evaluation_results.json --print
-uv run autorag artifacts <run-id> --pattern Pattern1 --artifact evaluation_results.json --print | jq .
+uv run autorag artifacts <run-id> --pattern Pattern1 --artifact evaluation_results.json | jq .
 ```
 
 | Flag | Description |
@@ -140,11 +137,10 @@ uv run autorag artifacts <run-id> --pattern Pattern1 --artifact evaluation_resul
 | `--prefix` | Explicit S3 prefix override (skip auto-resolution) |
 | `--bucket` | Explicit bucket override |
 | `--pattern` | RAG pattern name or `all` to list all patterns |
-| `--artifact` | Artifact filename within a pattern (requires `--pattern`) |
-| `--print` | Output artifact content to stdout (requires `--pattern` and `--artifact`) |
+| `--artifact` | Artifact filename within a pattern (requires `--pattern`); prints content to stdout by default |
 | `--download DIR` | Download artifacts to directory |
 
-Pattern name matching is case-insensitive and supports substring matching (e.g. `--pattern optim` matches `OptimizedChunking`). When `--artifact` is used without `--download`, the file is saved to the current directory.
+Pattern name matching is case-insensitive and supports substring matching (e.g. `--pattern optim` matches `OptimizedChunking`).
 
 ## Artifact resolution
 
@@ -194,11 +190,11 @@ uv run autorag artifacts <run-id>
 # List all patterns with file counts
 uv run autorag artifacts <run-id> --pattern all
 
-# Download a single evaluation result
+# Print a single artifact to stdout
 uv run autorag artifacts <run-id> --pattern Pattern1 --artifact evaluation_results.json
 
 # Pipe evaluation JSON into jq for quick analysis
-uv run autorag artifacts <run-id> --pattern Pattern1 --artifact evaluation_results.json --print | jq '.metrics'
+uv run autorag artifacts <run-id> --pattern Pattern1 --artifact evaluation_results.json | jq '.metrics'
 
 # Download an entire pattern's artifacts
 uv run autorag artifacts <run-id> --pattern Pattern1 --download ./pattern-results/

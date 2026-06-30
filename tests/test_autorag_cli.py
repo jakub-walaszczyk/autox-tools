@@ -1362,14 +1362,13 @@ class TestParser:
         args = parser.parse_args(["artifacts", "run-1", "--pattern", "all"])
         assert args.pattern == "all"
 
-    def test_artifacts_with_artifact_and_print(self):
+    def test_artifacts_with_artifact(self):
         parser = cli._build_parser()
         args = parser.parse_args([
             "artifacts", "run-1",
-            "--pattern", "P1", "--artifact", "pattern.json", "--print",
+            "--pattern", "P1", "--artifact", "pattern.json",
         ])
         assert args.artifact == "pattern.json"
-        assert args.print_content is True
 
     def test_artifacts_download(self):
         parser = cli._build_parser()
@@ -1381,7 +1380,6 @@ class TestParser:
         args = parser.parse_args(["artifacts", "run-1"])
         assert args.pattern is None
         assert args.artifact is None
-        assert args.print_content is False
         assert args.download is None
 
     def test_artifacts_prefix_and_bucket(self):
