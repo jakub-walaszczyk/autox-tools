@@ -1,6 +1,9 @@
-"""KFP client factory driven by environment variables.
+"""KFP client factory.
 
-Required env vars (or .env file)::
+Accepts an optional ``RhoaiConfig`` for profile-based configuration.
+Falls back to environment variables when no config is provided.
+
+Required env vars (or .env file) for the fallback path::
 
     RHOAI_KFP_URL          KFP API endpoint URL (must end with ``/``)
     RHOAI_TOKEN            Bearer token for authentication
@@ -15,15 +18,30 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import TYPE_CHECKING
 
 from dotenv import find_dotenv, load_dotenv
+
+if TYPE_CHECKING:
+    from autox_tools.config._models import RhoaiConfig
 
 _REQUIRED_VARS = ("RHOAI_KFP_URL", "RHOAI_TOKEN", "RHOAI_PROJECT_NAME")
 
 
-def connect():
-    """Build a ``kfp.Client`` from environment configuration."""
+def connect(cfg: RhoaiConfig | None = None):
+    """Build a ``kfp.Client`` from *cfg* or environment variables."""
     import kfp
+
+    if cfg is not None:
+        host = cfg.kfp_url
+        if not host.endswith("/"):
+            host += "/"
+        return kfp.Client(
+            host=host,
+            namespace=cfg.project_name,
+            existing_token=cfg.token,
+            verify_ssl=cfg.verify_ssl,
+        )
 
     load_dotenv(find_dotenv(usecwd=True))
 

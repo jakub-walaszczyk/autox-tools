@@ -1,0 +1,106 @@
+# autox-tools configuration — named profiles for service connections.
+#
+# Copy this file to .autox.yaml and edit to match your environments.
+# Secrets support ${ENV_VAR} interpolation so raw credentials stay out
+# of this file (keep them in your shell profile or .env).
+#
+# Usage:
+#   uv run s3 -p dev list                     # use the "dev" profile + config bucket
+#   uv run s3 -t aws-prod list               # target a named s3 config directly
+#   uv run s3 list -b other-bucket prefix/   # override bucket from CLI
+#   uv run pipelines -p staging status <id>   # multi-service profile
+#   AUTOX_PROFILE=staging uv run s3 list      # set via env var
+#
+# Resolution order (highest priority wins):
+#   1. --target / -t   (single-service CLIs only)
+#   2. --profile / -p
+#   3. AUTOX_PROFILE env var
+#   4. defaults.profile below
+#   5. .env fallback (full backward compatibility)
+
+# ── Defaults ────────────────────────────────────────────────────────────────
+
+defaults:
+  profile: dev
+
+# ── Profiles ────────────────────────────────────────────────────────────────
+# Each profile maps service types to named configs defined below.
+# Unset entries fall back to .env variables.
+
+profiles:
+  dev:
+    s3: minio-dev
+    artifacts_s3: minio-dev
+    rhoai: dev-cluster
+    milvus: local-milvus
+    pgvector: local-pgvector
+    ogx: dev-ogx
+
+  staging:
+    s3: aws-staging
+    artifacts_s3: aws-staging
+    rhoai: staging-cluster
+
+# ── S3 / MinIO configurations ──────────────────────────────────────────────
+
+s3:
+  minio-dev:
+    endpoint: https://minio.apps.dev-cluster.example.com
+    access_key_id: ${AWS_ACCESS_KEY_ID}
+    secret_access_key: ${AWS_SECRET_ACCESS_KEY}
+    region: us-east-1
+    verify_tls: false
+    bucket: dev-artifacts
+
+  aws-staging:
+    endpoint: https://s3.amazonaws.com
+    access_key_id: ${AWS_STAGING_ACCESS_KEY_ID}
+    secret_access_key: ${AWS_STAGING_SECRET_ACCESS_KEY}
+    region: us-west-2
+    verify_tls: true
+    bucket: staging-artifacts
+
+# ── RHOAI cluster configurations ───────────────────────────────────────────
+
+rhoai:
+  dev-cluster:
+    kfp_url: https://ds-pipeline-dspa.apps.dev-cluster.example.com/
+    token: ${RHOAI_DEV_TOKEN}
+    project_name: dev-namespace
+    verify_ssl: false
+    # Optional: override auto-derived K8S API URL
+    # k8s_api_url: https://api.dev-cluster.example.com:6443
+    # k8s_api_port: 6443
+
+  staging-cluster:
+    kfp_url: https://ds-pipeline-dspa.apps.staging.example.com/
+    token: ${RHOAI_STAGING_TOKEN}
+    project_name: staging-namespace
+    verify_ssl: true
+
+# ── Vector store configurations ────────────────────────────────────────────
+
+vs:
+  milvus:
+    local-milvus:
+      host: milvus.apps.dev-cluster.example.com
+      port: 19530
+      # user: ""
+      # password: ""
+      secure: false
+
+  pgvector:
+    local-pgvector:
+      host: pgvector.apps.dev-cluster.example.com
+      port: 5432
+      database: vectordb
+      # user: ""
+      # password: ""
+      sslmode: prefer
+
+# ── OGX configurations ─────────────────────────────────────────────────────
+
+ogx:
+  dev-ogx:
+    base_url: https://ogx.apps.dev-cluster.example.com
+    api_key: ${OGX_API_KEY}

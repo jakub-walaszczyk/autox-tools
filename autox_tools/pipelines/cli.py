@@ -792,7 +792,10 @@ def _discover_components(
 
 
 def _resolve_artifact_s3(
-    run_obj: Any, pipeline_name: str,
+    run_obj: Any,
+    pipeline_name: str,
+    *,
+    artifacts_s3_cfg: Any = None,
 ) -> tuple[Any, str, str, str]:
     """Resolve S3 client, bucket, prefix, and artifact root from KFP run config.
 
@@ -811,15 +814,20 @@ def _resolve_artifact_s3(
     if not artifact_root:
         artifact_root = f"{pipeline_name}/"
 
-    s3_endpoint = os.getenv("ARTIFACTS_AWS_S3_ENDPOINT")
-    if not s3_endpoint:
-        sys.exit(
-            "Artifacts S3 credentials not configured -- set ARTIFACTS_AWS_S3_ENDPOINT, "
-            "ARTIFACTS_AWS_ACCESS_KEY_ID, and ARTIFACTS_AWS_SECRET_ACCESS_KEY."
-        )
-
     from autox_tools.pipelines._artifacts_s3 import connect as artifacts_s3_connect
-    s3_client = artifacts_s3_connect()
+
+    if artifacts_s3_cfg is not None:
+        s3_client = artifacts_s3_connect(artifacts_s3_cfg)
+    else:
+        s3_endpoint = os.getenv("ARTIFACTS_AWS_S3_ENDPOINT")
+        if not s3_endpoint:
+            sys.exit(
+                "Artifacts S3 credentials not configured -- set ARTIFACTS_AWS_S3_ENDPOINT, "
+                "ARTIFACTS_AWS_ACCESS_KEY_ID, and ARTIFACTS_AWS_SECRET_ACCESS_KEY."
+            )
+        s3_client = artifacts_s3_connect()
+
+    config_bucket = getattr(artifacts_s3_cfg, "bucket", "") if artifacts_s3_cfg else ""
 
     if artifact_root.startswith("s3://"):
         cleaned = artifact_root[5:]
@@ -827,7 +835,7 @@ def _resolve_artifact_s3(
         bucket = parts[0]
         key_prefix = parts[1] if len(parts) == 2 else ""
     else:
-        bucket = os.getenv("ARTIFACTS_S3_BUCKET", "")
+        bucket = os.getenv("ARTIFACTS_S3_BUCKET", "") or config_bucket
         if not bucket:
             sys.exit(
                 "ARTIFACTS_S3_BUCKET is required when the KFP run config does not "
@@ -982,13 +990,14 @@ def _cmd_artifacts_component(
         _download_objects(s3_client, bucket, objects, comp_prefix, args.download)
 
 
-def cmd_artifacts(kfp_client: Any, args: argparse.Namespace, **_: Any) -> None:
+def cmd_artifacts(kfp_client: Any, args: argparse.Namespace, **kwargs: Any) -> None:
     """List or download S3 artifacts from a pipeline run."""
+    artifacts_s3_cfg = kwargs.get("artifacts_s3_cfg")
     run = kfp_client.get_run(args.run_id)
     run_obj = getattr(run, "run", run)
     pipeline_name = _get_pipeline_name(run_obj) or "unknown"
 
-    has_s3 = bool(os.getenv("ARTIFACTS_AWS_S3_ENDPOINT"))
+    has_s3 = bool(os.getenv("ARTIFACTS_AWS_S3_ENDPOINT")) or artifacts_s3_cfg is not None
     if not has_s3 and not args.component:
         runtime_config = getattr(run_obj, "runtime_config", None)
         artifact_root = None
@@ -1009,7 +1018,7 @@ def cmd_artifacts(kfp_client: Any, args: argparse.Namespace, **_: Any) -> None:
         return
 
     s3_client, bucket, key_prefix, artifact_root = _resolve_artifact_s3(
-        run_obj, pipeline_name,
+        run_obj, pipeline_name, artifacts_s3_cfg=artifacts_s3_cfg,
     )
     key_prefix = _refine_prefix_for_run(s3_client, bucket, key_prefix, args.run_id)
 
@@ -1278,15 +1287,21 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     parser = _build_parser()
+
+    from autox_tools.config._loader import add_profile_args, resolve
+    add_profile_args(parser)
+
     args = parser.parse_args()
+    rhoai_cfg = resolve("rhoai", args)
+    artifacts_s3_cfg = resolve("artifacts_s3", args) if args.command == "artifacts" else None
 
     dry_run = args.command == "run" and args.dry_run
-    kfp_client = None if dry_run else kfp_connect()
+    kfp_client = None if dry_run else kfp_connect(rhoai_cfg)
 
     k8s_api = None
     if args.command == "logs":
         from autox_tools.pipelines._k8s import connect as k8s_connect
-        k8s_api = k8s_connect(os.getenv("RHOAI_KFP_URL"))
+        k8s_api = k8s_connect(cfg=rhoai_cfg) if rhoai_cfg is not None else k8s_connect(os.getenv("RHOAI_KFP_URL"))
 
     commands: dict[str, Any] = {
         "status": cmd_status,
@@ -1296,7 +1311,7 @@ def main() -> None:
         "artifacts": cmd_artifacts,
         "run": cmd_run,
     }
-    commands[args.command](kfp_client, args, k8s_api=k8s_api)
+    commands[args.command](kfp_client, args, k8s_api=k8s_api, artifacts_s3_cfg=artifacts_s3_cfg)
 
 
 if __name__ == "__main__":

@@ -4,9 +4,32 @@ Command-line tool for managing PostgreSQL databases with the pgvector extension.
 
 ## Setup
 
+### Profile-based configuration (recommended)
+
+Define named pgvector configs under the `vs.pgvector` section in `.autox.yaml`:
+
+```yaml
+vs:
+  pgvector:
+    local-pgvector:
+      host: pgvector.apps.dev-cluster.example.com
+      port: 5432
+      database: vectordb
+      sslmode: prefer
+```
+
+Then select them via CLI flags:
+
+```bash
+uv run vs pgvector -p dev health                    # use the "dev" profile
+uv run vs pgvector -t local-pgvector list            # target a named config directly
+```
+
+See the [main README](../../../README.md#configuration) for full details on `.autox.yaml` profiles and resolution order. Run `uv run config init` to generate a starter config.
+
 ### Environment variables
 
-Create a `.env` file in the project root or export the variables directly:
+Alternatively, create a `.env` file in the project root or export the variables directly:
 
 ```bash
 # Required
@@ -20,7 +43,7 @@ PGVECTOR_PASSWORD=secret       # Authentication password
 PGVECTOR_SSLMODE=prefer        # SSL mode (default: "prefer")
 ```
 
-The tool uses `python-dotenv` and walks up the directory tree to find the nearest `.env` file, so a single file at the repo root covers all invocations.
+This path is used automatically when no `.autox.yaml` is present or no profile/target is specified.
 
 ### Verify connectivity
 
@@ -30,7 +53,7 @@ uv run vs pgvector health
 
 ## Commands
 
-All commands accept a global `--json` flag for machine-readable output (useful for piping into `jq` or scripting).
+All commands accept a global `--json` flag for machine-readable output (useful for piping into `jq` or scripting). Use `--profile/-p` or `--target/-t` to select a config from `.autox.yaml`.
 
 ### Table inspection
 
@@ -146,9 +169,9 @@ uv run vs pgvector --json count | jq -r '.tables[] | select(.row_count > 1000000
 ## Architecture
 
 ```
-autox_tools/pgvector/
+autox_tools/vs/pgvector/
   __init__.py    # Package marker
-  _client.py     # Connection factory -- reads env vars, validates, returns psycopg.Connection
+  _client.py     # Connection factory (config or env vars -> psycopg.Connection)
   cli.py         # argparse CLI with all subcommands
 ```
 

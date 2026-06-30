@@ -19,7 +19,7 @@ git clone <repo-url> && cd autox-tools
 uv sync
 
 # Verify
-uv run milvus --help
+uv run vs milvus --help
 ```
 
 ## Available tools
@@ -30,9 +30,11 @@ uv run milvus --help
 | `autorag` | [`autox_tools/autorag/`](autox_tools/autorag/README.md) | Analyze AutoRAG experiment results -- leaderboard ranking, side-by-side comparison, PDF reports, RAG pattern browsing, and artifact export |
 | `automl` | [`autox_tools/automl/`](autox_tools/automl/README.md) | AutoML experiment management -- placeholder for future result analysis tooling |
 | `s3` | [`autox_tools/s3/`](autox_tools/s3/README.md) | Browse, download, upload, and clean up S3/MinIO experiment artifacts |
-| `milvus` | [`autox_tools/milvus/`](autox_tools/milvus/README.md) | Manage remote Milvus vector database instances -- list, inspect, query, export, and maintain collections |
+| `vs milvus` | [`autox_tools/vs/milvus/`](autox_tools/vs/milvus/README.md) | Manage remote Milvus vector database instances -- list, inspect, query, export, and maintain collections |
+| `vs pgvector` | [`autox_tools/vs/pgvector/`](autox_tools/vs/pgvector/README.md) | Manage PostgreSQL/pgvector tables -- list, inspect, query, export, and maintain vector tables |
 | `ogx` | [`autox_tools/ogx/`](autox_tools/ogx/README.md) | Inspect and test models, providers, and vector stores on an OGX gateway |
 | `secrets` | [`autox_tools/secrets/`](autox_tools/secrets/README.md) | Manage Kubernetes Opaque secrets -- list, decode, create, update, and delete key-value secrets |
+| `config` | [`autox_tools/config/`](autox_tools/config/README.md) | Manage configuration profiles -- list, show, validate, and initialize `.autox.yaml` |
 
 ## Typical workflow
 
@@ -40,25 +42,55 @@ Submit an AutoRAG or AutoML experiment, monitor it, and inspect results -- all f
 
 ```bash
 # 1. Submit a pipeline run from a JSON config
-uv run pipelines run autorag-config.json --watch
+uv run pipelines -p dev run autorag-config.json --watch
 
 # 2. Once complete, view evaluation metrics
-uv run autorag results <run-id>
+uv run autorag -p dev results <run-id>
 
 # 3. Compare against a previous run
-uv run autorag compare <run-id-1> <run-id-2>
+uv run autorag -p dev compare <run-id-1> <run-id-2>
 
 # 4. Download artifacts for offline analysis
-uv run pipelines artifacts <run-id> --download ./results/
+uv run pipelines -p dev artifacts <run-id> --download ./results/
 ```
+
+The `-p dev` flag selects the `dev` profile from `.autox.yaml`. If `defaults.profile` is set in the config, or the `AUTOX_PROFILE` env var is exported, the flag can be omitted entirely.
 
 See the [pipelines README](autox_tools/pipelines/README.md) for example config files for AutoRAG and AutoML.
 
 ## Configuration
 
-Each tool reads its connection settings from environment variables. Place a `.env` file in the project root (or any parent directory) to avoid exporting variables manually. See individual tool READMEs for required variables.
+### Profile-based configuration (`.autox.yaml`)
 
-Two independent S3 connections are supported:
+The recommended approach is a `.autox.yaml` file in the project root. It defines named service configs and composable profiles so you can switch between environments (dev, staging, prod) with a single flag:
+
+```bash
+uv run s3 -p dev list                      # use the "dev" profile (bucket from config)
+uv run s3 -t minio-dev list               # target a named S3 config directly
+uv run pipelines -p staging status <id>    # multi-service profile
+```
+
+Generate a starter config from the bundled template:
+
+```bash
+uv run config init
+```
+
+See [`.autox.yaml.example`](.autox.yaml.example) for the full annotated reference. Secrets support `${ENV_VAR}` interpolation so raw credentials stay out of the file.
+
+**Resolution order** (highest priority wins):
+
+1. `--target / -t` -- named service config (single-service CLIs only)
+2. `--profile / -p` -- profile name
+3. `AUTOX_PROFILE` environment variable
+4. `defaults.profile` in the config file
+5. `.env` fallback (full backward compatibility)
+
+Manage configs with `uv run config list`, `show`, and `validate`.
+
+### Environment variables (`.env`)
+
+Each tool also reads connection settings from environment variables. Place a `.env` file in the project root (or any parent directory) to avoid exporting variables manually. This path is used automatically when no `.autox.yaml` exists. See individual tool READMEs for required variables.
 
 | Prefix | Purpose | Used by |
 |---|---|---|
@@ -89,6 +121,11 @@ uv run pytest
 autox-tools/
   autox_tools/
     __init__.py
+    config/            # Profile-based configuration system
+      __init__.py
+      _models.py       #   Frozen dataclasses for service configs and profiles
+      _loader.py       #   YAML parsing, env-var interpolation, profile resolution
+      cli.py           #   Config management CLI (list, show, validate, init)
     autorag/           # AutoRAG experiment analysis tool
       __init__.py
       _artifacts.py    #   Artifact download and categorization
@@ -102,35 +139,44 @@ autox-tools/
       __init__.py
       cli.py           #   argparse entry point and subcommands
       README.md        #   Command reference and setup guide
-    milvus/            # Milvus CLI tool
+    vs/                # Unified vector store CLI (dispatcher + backends)
       __init__.py
-      _client.py       #   Connection factory (env vars -> MilvusClient)
-      cli.py           #   argparse entry point and subcommands
-      README.md        #   Command reference and setup guide
+      cli.py           #   Dispatcher: routes "vs milvus" / "vs pgvector"
+      milvus/          #   Milvus backend
+        __init__.py
+        _client.py     #     Connection factory (config or env vars -> MilvusClient)
+        cli.py         #     argparse entry point and subcommands
+        README.md      #     Command reference and setup guide
+      pgvector/        #   pgvector backend
+        __init__.py
+        _client.py     #     Connection factory (config or env vars -> psycopg.Connection)
+        cli.py         #     argparse entry point and subcommands
+        README.md      #     Command reference and setup guide
     ogx/               # OGX gateway CLI tool
       __init__.py
-      _client.py       #   Connection factory (env vars -> OgxClient)
+      _client.py       #   Connection factory (config or env vars -> OgxClient)
       cli.py           #   argparse entry point and subcommands
       README.md        #   Command reference and setup guide
     secrets/           # Kubernetes secret management tool
       __init__.py
-      _client.py       #   K8S client factory (env vars -> CoreV1Api)
+      _client.py       #   K8S client factory (config or env vars -> CoreV1Api)
       cli.py           #   argparse entry point and subcommands
       README.md        #   Command reference and setup guide
     pipelines/         # KFP pipeline management tool
       __init__.py
-      _kfp.py          #   KFP client factory (env vars -> kfp.Client)
+      _kfp.py          #   KFP client factory (config or env vars -> kfp.Client)
       _k8s.py          #   Kubernetes client factory with API URL derivation
-      _artifacts_s3.py #   S3 client factory for pipeline artifacts (ARTIFACTS_AWS_*)
+      _artifacts_s3.py #   S3 client factory for pipeline artifacts
       _filters.py      #   Task noise filtering (hides scaffolding tasks)
       cli.py           #   argparse entry point and subcommands
       README.md        #   Command reference and setup guide
     s3/                # S3/MinIO asset management tool
       __init__.py
-      _client.py       #   S3 client factory (env vars -> boto3 client)
+      _client.py       #   S3 client factory (config or env vars -> boto3 client)
       cli.py           #   argparse entry point and subcommands
       README.md        #   Command reference and setup guide
   tests/
+  .autox.yaml.example  # Annotated config template
   pyproject.toml
 ```
 

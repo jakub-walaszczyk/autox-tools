@@ -6,7 +6,7 @@ AutoML automates model selection and hyperparameter tuning using [AutoGluon](htt
 
 ## Setup
 
-No additional configuration is required beyond what the `pipelines` tool uses. When result analysis subcommands are added, they will share the same `RHOAI_*` and `ARTIFACTS_AWS_*` credentials described in the [pipelines README](../pipelines/README.md).
+No additional configuration is required beyond what the `pipelines` tool uses. The CLI accepts `--profile/-p` for profile-based configuration via `.autox.yaml`. When result analysis subcommands are added, they will share the same `RHOAI_*` and `ARTIFACTS_AWS_*` credentials described in the [pipelines README](../pipelines/README.md).
 
 ## Commands
 

@@ -2,11 +2,11 @@
 
 Usage::
 
-    uv run s3 list <bucket> [prefix] [--recursive] [--limit N]
-    uv run s3 tree <bucket> [prefix] [--depth N]
-    uv run s3 download <bucket> <prefix> [--output DIR] [--pattern GLOB]
-    uv run s3 upload <local-path> <bucket> <prefix> [--recursive]
-    uv run s3 cleanup <bucket> <prefix> [--older-than DAYS] [--pattern GLOB] [--dry-run] [--yes]
+    uv run s3 list [prefix] [-b BUCKET] [--recursive] [--limit N]
+    uv run s3 tree [prefix] [-b BUCKET] [--depth N]
+    uv run s3 download <prefix> [-b BUCKET] [--output DIR] [--pattern GLOB]
+    uv run s3 upload <local-path> <prefix> [-b BUCKET] [--recursive]
+    uv run s3 cleanup <prefix> [-b BUCKET] [--older-than DAYS] [--pattern GLOB] [--dry-run] [--yes]
 """
 
 from __future__ import annotations
@@ -353,37 +353,39 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", required=True)
 
+    bucket_help = "Bucket name (default: from .autox.yaml config)"
+
     # list
     p = sub.add_parser("list", help="List objects in a bucket")
-    p.add_argument("bucket", help="Bucket name")
     p.add_argument("prefix", nargs="?", default="", help="Key prefix to filter")
+    p.add_argument("--bucket", "-b", default=None, help=bucket_help)
     p.add_argument("--recursive", "-r", action="store_true", help="List all objects recursively")
     p.add_argument("--limit", type=int, default=1000, help="Max objects to return (default: 1000)")
 
     # tree
     p = sub.add_parser("tree", help="Tree view of object hierarchy")
-    p.add_argument("bucket", help="Bucket name")
     p.add_argument("prefix", nargs="?", default="", help="Root prefix")
+    p.add_argument("--bucket", "-b", default=None, help=bucket_help)
     p.add_argument("--depth", type=int, default=3, help="Max directory depth (default: 3)")
 
     # download
     p = sub.add_parser("download", help="Download objects to local directory")
-    p.add_argument("bucket", help="Bucket name")
     p.add_argument("prefix", help="S3 key prefix to download from")
+    p.add_argument("--bucket", "-b", default=None, help=bucket_help)
     p.add_argument("--output", "-o", default=".", help="Local destination directory (default: .)")
     p.add_argument("--pattern", help="Glob pattern to filter keys (e.g. '*.json')")
 
     # upload
     p = sub.add_parser("upload", help="Upload local files to S3")
     p.add_argument("local_path", help="Local file or directory")
-    p.add_argument("bucket", help="Destination bucket")
     p.add_argument("prefix", help="S3 key prefix")
+    p.add_argument("--bucket", "-b", default=None, help=bucket_help)
     p.add_argument("--recursive", "-r", action="store_true", help="Upload entire directory tree")
 
     # cleanup
     p = sub.add_parser("cleanup", help="Delete old or matching artifacts")
-    p.add_argument("bucket", help="Bucket name")
     p.add_argument("prefix", help="S3 key prefix scope")
+    p.add_argument("--bucket", "-b", default=None, help=bucket_help)
     p.add_argument("--older-than", type=int, default=None, help="Only delete objects older than N days")
     p.add_argument("--pattern", help="Glob pattern to filter keys")
     p.add_argument("--dry-run", action="store_true", help="List what would be deleted without acting")
@@ -392,10 +394,29 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _resolve_bucket(args: argparse.Namespace, cfg: Any) -> str:
+    """Resolve bucket from CLI ``--bucket`` flag, falling back to config."""
+    bucket = args.bucket or ""
+    if bucket:
+        return bucket
+    if cfg is not None and getattr(cfg, "bucket", ""):
+        return cfg.bucket
+    sys.exit(
+        "No bucket specified. Provide --bucket / -b on the command line "
+        "or set 'bucket' in your S3 config in .autox.yaml."
+    )
+
+
 def main() -> None:
     parser = _build_parser()
+
+    from autox_tools.config._loader import add_profile_args, resolve
+    add_profile_args(parser, target=True)
+
     args = parser.parse_args()
-    client = connect()
+    cfg = resolve("s3", args)
+    args.bucket = _resolve_bucket(args, cfg)
+    client = connect(cfg)
 
     commands: dict[str, Any] = {
         "list": cmd_list,

@@ -12,8 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from autox_tools.pgvector import cli
-
+from autox_tools.vs.pgvector import cli
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -53,11 +52,11 @@ class TestClientConnect:
     def test_missing_env_vars_exits(self):
         with (
             patch.dict(os.environ, {}, clear=True),
-            patch("autox_tools.pgvector._client.load_dotenv"),
-            patch("autox_tools.pgvector._client.find_dotenv", return_value=""),
+            patch("autox_tools.vs.pgvector._client.load_dotenv"),
+            patch("autox_tools.vs.pgvector._client.find_dotenv", return_value=""),
             pytest.raises(SystemExit, match="Missing required environment variables"),
         ):
-            from autox_tools.pgvector._client import connect
+            from autox_tools.vs.pgvector._client import connect
             connect()
 
     def test_connect_builds_connection(self):
@@ -70,11 +69,11 @@ class TestClientConnect:
         }
         with (
             patch.dict(os.environ, env, clear=True),
-            patch("autox_tools.pgvector._client.load_dotenv"),
-            patch("autox_tools.pgvector._client.find_dotenv", return_value=""),
-            patch("autox_tools.pgvector._client.Connection") as mock_cls,
+            patch("autox_tools.vs.pgvector._client.load_dotenv"),
+            patch("autox_tools.vs.pgvector._client.find_dotenv", return_value=""),
+            patch("autox_tools.vs.pgvector._client.Connection") as mock_cls,
         ):
-            from autox_tools.pgvector._client import connect
+            from autox_tools.vs.pgvector._client import connect
             connect()
             mock_cls.connect.assert_called_once_with(
                 host="localhost",
@@ -94,11 +93,11 @@ class TestClientConnect:
         }
         with (
             patch.dict(os.environ, env, clear=True),
-            patch("autox_tools.pgvector._client.load_dotenv"),
-            patch("autox_tools.pgvector._client.find_dotenv", return_value=""),
-            patch("autox_tools.pgvector._client.Connection") as mock_cls,
+            patch("autox_tools.vs.pgvector._client.load_dotenv"),
+            patch("autox_tools.vs.pgvector._client.find_dotenv", return_value=""),
+            patch("autox_tools.vs.pgvector._client.Connection") as mock_cls,
         ):
-            from autox_tools.pgvector._client import connect
+            from autox_tools.vs.pgvector._client import connect
             connect()
             _, kwargs = mock_cls.connect.call_args
             assert kwargs["user"] == ""

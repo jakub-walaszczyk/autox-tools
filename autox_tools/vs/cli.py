@@ -19,8 +19,8 @@ import importlib
 import sys
 
 _BACKENDS: dict[str, str] = {
-    "milvus": "autox_tools.milvus.cli",
-    "pgvector": "autox_tools.pgvector.cli",
+    "milvus": "autox_tools.vs.milvus.cli",
+    "pgvector": "autox_tools.vs.pgvector.cli",
 }
 
 

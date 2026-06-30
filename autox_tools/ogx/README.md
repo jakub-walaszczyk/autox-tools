@@ -4,14 +4,29 @@ Inspect and test models, providers, and vector stores on an OGX gateway.
 
 ## Setup
 
-Set the following environment variables (or add them to a `.env` file):
+### Profile-based configuration (recommended)
+
+Define named OGX configs in `.autox.yaml` and select them via CLI flags:
+
+```bash
+uv run ogx -p dev health                     # use the "dev" profile
+uv run ogx -t dev-ogx models                 # target a named config directly
+```
+
+See the [main README](../../README.md#configuration) for full details on `.autox.yaml` profiles and resolution order. Run `uv run config init` to generate a starter config.
+
+### Environment variables
+
+Alternatively, set the following environment variables (or add them to a `.env` file):
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `OGX_CLIENT_BASE_URL` | yes | -- | OGX server base URL |
 | `OGX_CLIENT_API_KEY` | no | -- | API key for authentication |
 
-Verify connectivity:
+This path is used automatically when no `.autox.yaml` is present or no profile/target is specified.
+
+### Verify connectivity
 
 ```bash
 uv run ogx health
@@ -102,7 +117,7 @@ When called with a `model-id`, sends a single request and reports the result:
 ```
 autox_tools/ogx/
     __init__.py     # package marker
-    _client.py      # OgxClient connection factory (env vars)
+    _client.py      # OgxClient connection factory (config or env vars)
     cli.py          # argparse entry point and command handlers
     README.md       # this file
 ```

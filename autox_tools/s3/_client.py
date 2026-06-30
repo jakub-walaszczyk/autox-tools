@@ -1,6 +1,9 @@
-"""S3 connection factory driven by environment variables.
+"""S3 connection factory.
 
-Required env vars (or .env file):
+Accepts an optional ``S3Config`` for profile-based configuration.
+Falls back to environment variables when no config is provided.
+
+Required env vars (or .env file) for the fallback path:
     AWS_S3_ENDPOINT       -- S3 endpoint URL (e.g. "https://minio.apps.cluster.example.com")
     AWS_ACCESS_KEY_ID     -- Access key
     AWS_SECRET_ACCESS_KEY -- Secret key
@@ -14,17 +17,31 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import boto3
 from botocore.config import Config
 from dotenv import find_dotenv, load_dotenv
 
+if TYPE_CHECKING:
+    from autox_tools.config._models import S3Config
+
 _REQUIRED_VARS = ("AWS_S3_ENDPOINT", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
 
 
-def connect() -> Any:
-    """Build a boto3 S3 client from environment configuration."""
+def connect(cfg: S3Config | None = None) -> Any:
+    """Build a boto3 S3 client from *cfg* or environment variables."""
+    if cfg is not None:
+        return boto3.client(
+            "s3",
+            endpoint_url=cfg.endpoint,
+            aws_access_key_id=cfg.access_key_id,
+            aws_secret_access_key=cfg.secret_access_key,
+            region_name=cfg.region,
+            verify=cfg.verify_tls,
+            config=Config(s3={"addressing_style": "path"}),
+        )
+
     load_dotenv(find_dotenv(usecwd=True))
 
     missing = [v for v in _REQUIRED_VARS if not os.getenv(v)]
