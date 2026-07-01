@@ -23,6 +23,7 @@ import re
 import sys
 from typing import TYPE_CHECKING
 
+from autox_tools._output import print_json
 from autox_tools.vs.milvus._client import connect
 
 if TYPE_CHECKING:
@@ -42,10 +43,6 @@ def _match_collections(collections: list[str], pattern: str) -> list[str]:
     return sorted(c for c in collections if regex.fullmatch(c) or c.startswith(pattern))
 
 
-def _print_json(data: object) -> None:
-    print(json.dumps(data, indent=2, default=str))
-
-
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -62,7 +59,7 @@ def cmd_list(client: MilvusClient, args: argparse.Namespace) -> None:
                 stats = client.get_collection_stats(name)
                 entry["row_count"] = int(stats.get("row_count", 0))
             rows.append(entry)
-        _print_json({"total": len(collections), "collections": rows})
+        print_json({"total": len(collections), "collections": rows})
         return
 
     print(f"Total collections: {len(collections)}\n")
@@ -89,7 +86,7 @@ def cmd_describe(client: MilvusClient, args: argparse.Namespace) -> None:
         idx_details = {}
         for idx_name in indexes:
             idx_details[idx_name] = client.describe_index(name, idx_name)
-        _print_json({
+        print_json({
             "collection": name,
             "description": info.get("description", ""),
             "auto_id": info.get("auto_id"),
@@ -180,7 +177,7 @@ def cmd_count(client: MilvusClient, args: argparse.Namespace) -> None:
         rows.append({"name": name, "row_count": count})
 
     if args.json:
-        _print_json({"total_collections": len(rows), "total_rows": total_rows, "collections": rows})
+        print_json({"total_collections": len(rows), "total_rows": total_rows, "collections": rows})
         return
 
     max_name = max(len(r["name"]) for r in rows) if rows else 10  # type: ignore[arg-type]
@@ -210,7 +207,7 @@ def cmd_query(client: MilvusClient, args: argparse.Namespace) -> None:
     )
 
     if args.json:
-        _print_json(results)
+        print_json(results)
         return
 
     if not results:
@@ -305,7 +302,7 @@ def cmd_health(client: MilvusClient, args: argparse.Namespace) -> None:
         total_rows += int(stats.get("row_count", 0))
 
     if args.json:
-        _print_json({
+        print_json({
             "status": "connected",
             "total_collections": len(collections),
             "total_rows": total_rows,
@@ -326,7 +323,7 @@ def cmd_partitions(client: MilvusClient, args: argparse.Namespace) -> None:
     partitions = client.list_partitions(name)
 
     if args.json:
-        _print_json({"collection": name, "partitions": partitions})
+        print_json({"collection": name, "partitions": partitions})
         return
 
     print(f"Partitions for '{name}' ({len(partitions)}):\n")

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from autox_tools.s3.cli import _paginate_objects
+from autox_tools._s3_utils import paginate_objects
 
 
 class ArtifactCategory(Enum):
@@ -74,7 +74,7 @@ def list_and_categorize(
     s3_client: Any, bucket: str, prefix: str,
 ) -> list[CategorizedArtifact]:
     """List all S3 objects under *prefix* and categorize each."""
-    result = _paginate_objects(s3_client, bucket, prefix)
+    result = paginate_objects(s3_client, bucket, prefix)
     artifacts: list[CategorizedArtifact] = []
     for obj in result.get("Contents", []):
         key = obj["Key"]

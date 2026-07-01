@@ -9,6 +9,7 @@ import argparse
 import base64
 import json
 import os
+from datetime import UTC
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -16,7 +17,6 @@ import pytest
 
 from autox_tools.secrets import cli
 from autox_tools.secrets._client import _derive_k8s_api_url
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -105,17 +105,17 @@ class TestDeriveK8sApiUrl:
 
 class TestClientConnect:
     @patch.dict(os.environ, {}, clear=True)
-    @patch("autox_tools.secrets._client.load_dotenv")
-    @patch("autox_tools.secrets._client.find_dotenv", return_value="")
+    @patch("autox_tools._k8s.load_dotenv")
+    @patch("autox_tools._k8s.find_dotenv", return_value="")
     def test_missing_token_exits(self, _find: MagicMock, _load: MagicMock) -> None:
         with pytest.raises(SystemExit, match="Missing RHOAI_TOKEN"):
             from autox_tools.secrets._client import connect
             connect()
 
     @patch.dict(os.environ, {"RHOAI_TOKEN": "sha256~abc", "K8S_API_URL": "https://api.cluster:6443"})
-    @patch("autox_tools.secrets._client.load_dotenv")
-    @patch("autox_tools.secrets._client.find_dotenv", return_value="")
-    @patch("autox_tools.secrets._client.k8s_client")
+    @patch("autox_tools._k8s.load_dotenv")
+    @patch("autox_tools._k8s.find_dotenv", return_value="")
+    @patch("autox_tools._k8s.k8s_client")
     def test_connect_with_explicit_url(self, mock_k8s: MagicMock, _find: MagicMock, _load: MagicMock) -> None:
         mock_config = MagicMock()
         mock_k8s.Configuration.return_value = mock_config
@@ -132,9 +132,9 @@ class TestClientConnect:
         "RHOAI_TOKEN": "sha256~abc",
         "RHOAI_KFP_URL": "https://ds-pipeline.apps.mycluster.example.com/",
     }, clear=True)
-    @patch("autox_tools.secrets._client.load_dotenv")
-    @patch("autox_tools.secrets._client.find_dotenv", return_value="")
-    @patch("autox_tools.secrets._client.k8s_client")
+    @patch("autox_tools._k8s.load_dotenv")
+    @patch("autox_tools._k8s.find_dotenv", return_value="")
+    @patch("autox_tools._k8s.k8s_client")
     def test_connect_derives_from_kfp_url(self, mock_k8s: MagicMock, _find: MagicMock, _load: MagicMock) -> None:
         mock_config = MagicMock()
         mock_k8s.Configuration.return_value = mock_config
@@ -145,8 +145,8 @@ class TestClientConnect:
         assert mock_config.host == "https://api.mycluster.example.com:6443"
 
     @patch.dict(os.environ, {"RHOAI_TOKEN": "sha256~abc"}, clear=True)
-    @patch("autox_tools.secrets._client.load_dotenv")
-    @patch("autox_tools.secrets._client.find_dotenv", return_value="")
+    @patch("autox_tools._k8s.load_dotenv")
+    @patch("autox_tools._k8s.find_dotenv", return_value="")
     def test_connect_no_url_exits(self, _find: MagicMock, _load: MagicMock) -> None:
         with pytest.raises(SystemExit, match="K8S API URL could not be resolved"):
             from autox_tools.secrets._client import connect
@@ -157,10 +157,10 @@ class TestClientConnect:
         "K8S_API_URL": "https://api.cluster:6443",
         "KFP_VERIFY_SSL": "false",
     })
-    @patch("autox_tools.secrets._client.load_dotenv")
-    @patch("autox_tools.secrets._client.find_dotenv", return_value="")
-    @patch("autox_tools.secrets._client.k8s_client")
-    @patch("autox_tools.secrets._client.urllib3")
+    @patch("autox_tools._k8s.load_dotenv")
+    @patch("autox_tools._k8s.find_dotenv", return_value="")
+    @patch("autox_tools._k8s.k8s_client")
+    @patch("autox_tools._k8s.urllib3")
     def test_connect_ssl_disabled(
         self, mock_urllib3: MagicMock, mock_k8s: MagicMock, _find: MagicMock, _load: MagicMock,
     ) -> None:
@@ -192,9 +192,8 @@ class TestResolveNamespace:
 
     def test_missing_namespace_exits(self) -> None:
         args = _ns_args(namespace=None)
-        with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(SystemExit, match="Namespace is required"):
-                cli._resolve_namespace(args)
+        with patch.dict(os.environ, {}, clear=True), pytest.raises(SystemExit, match="Namespace is required"):
+            cli._resolve_namespace(args)
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +433,7 @@ class TestCmdCreate:
         api = _mock_api()
         api.create_namespaced_secret.side_effect = Exception("409 Conflict AlreadyExists")
         args = _ns_args(command="create", from_literal=["k=v"], from_env_file=None)
-        with pytest.raises(SystemExit, match="already exists.*edit"):
+        with pytest.raises(SystemExit, match=r"already exists.*edit"):
             cli.cmd_create(api, args, "test-ns")
 
     def test_confirmation_abort(self, capsys: pytest.CaptureFixture[str]) -> None:
@@ -604,7 +603,7 @@ class TestCmdEdit:
         api = _mock_api()
         api.read_namespaced_secret.side_effect = Exception("404 Not Found")
         args = _ns_args(command="edit", name="missing", set_values=["k=v"], remove_keys=None)
-        with pytest.raises(SystemExit, match="not found.*create"):
+        with pytest.raises(SystemExit, match=r"not found.*create"):
             cli.cmd_edit(api, args, "test-ns")
 
     def test_non_opaque_exits(self) -> None:
@@ -759,13 +758,13 @@ class TestHelpers:
             cli._parse_labels("noequalssign")
 
     def test_format_age_days(self) -> None:
-        from datetime import datetime, timedelta, timezone
-        created = datetime.now(timezone.utc) - timedelta(days=3)
+        from datetime import datetime, timedelta
+        created = datetime.now(UTC) - timedelta(days=3)
         assert cli._format_age(created) == "3d"
 
     def test_format_age_hours(self) -> None:
-        from datetime import datetime, timedelta, timezone
-        created = datetime.now(timezone.utc) - timedelta(hours=5)
+        from datetime import datetime, timedelta
+        created = datetime.now(UTC) - timedelta(hours=5)
         assert cli._format_age(created) == "5h"
 
     def test_format_age_none(self) -> None:

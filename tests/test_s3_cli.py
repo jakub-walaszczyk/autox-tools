@@ -13,6 +13,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from autox_tools._output import human_size
+from autox_tools._s3_utils import paginate_objects
 from autox_tools.s3 import cli
 
 # ---------------------------------------------------------------------------
@@ -48,8 +50,8 @@ def _mock_list_response(objects: list[dict], *, prefixes: list[str] | None = Non
 class TestClientConnect:
     def test_missing_env_vars_exits(self):
         with patch.dict(os.environ, {}, clear=True), \
-             patch("autox_tools.s3._client.load_dotenv"), \
-             patch("autox_tools.s3._client.find_dotenv", return_value=""), \
+             patch("autox_tools._s3_connect.load_dotenv"), \
+             patch("autox_tools._s3_connect.find_dotenv", return_value=""), \
              pytest.raises(SystemExit, match="Missing required environment variables"):
             from autox_tools.s3._client import connect
             connect()
@@ -61,9 +63,9 @@ class TestClientConnect:
             "AWS_SECRET_ACCESS_KEY": "secret",
         }
         with patch.dict(os.environ, env, clear=True), \
-             patch("autox_tools.s3._client.load_dotenv"), \
-             patch("autox_tools.s3._client.find_dotenv", return_value=""), \
-             patch("autox_tools.s3._client.boto3") as mock_boto3:
+             patch("autox_tools._s3_connect.load_dotenv"), \
+             patch("autox_tools._s3_connect.find_dotenv", return_value=""), \
+             patch("autox_tools._s3_connect.boto3") as mock_boto3:
             from autox_tools.s3._client import connect
             connect()
             _, kwargs = mock_boto3.client.call_args
@@ -82,9 +84,9 @@ class TestClientConnect:
             "S3_VERIFY_TLS": "false",
         }
         with patch.dict(os.environ, env, clear=True), \
-             patch("autox_tools.s3._client.load_dotenv"), \
-             patch("autox_tools.s3._client.find_dotenv", return_value=""), \
-             patch("autox_tools.s3._client.boto3") as mock_boto3:
+             patch("autox_tools._s3_connect.load_dotenv"), \
+             patch("autox_tools._s3_connect.find_dotenv", return_value=""), \
+             patch("autox_tools._s3_connect.boto3") as mock_boto3:
             from autox_tools.s3._client import connect
             connect()
             _, kwargs = mock_boto3.client.call_args
@@ -105,7 +107,7 @@ class TestHumanSize:
         (1073741824, "1.0 GB"),
     ])
     def test_formatting(self, nbytes, expected):
-        assert cli._human_size(nbytes) == expected
+        assert human_size(nbytes) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +175,7 @@ class TestCmdList:
         page2 = _mock_list_response([_make_s3_object("b.txt")], truncated=False)
         client.list_objects_v2.side_effect = [page1, page2]
 
-        result = cli._paginate_objects(client, "bucket", "")
+        result = paginate_objects(client, "bucket", "")
         assert len(result["Contents"]) == 2
         assert client.list_objects_v2.call_count == 2
 

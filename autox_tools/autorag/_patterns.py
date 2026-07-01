@@ -10,16 +10,17 @@ from __future__ import annotations
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from datetime import datetime
 
+from autox_tools._s3_utils import paginate_objects
 from autox_tools.autorag._artifacts import extract_metrics
 from autox_tools.autorag._resolver import ArtifactLocation, resolve
-from autox_tools.pipelines.cli import _get_pipeline_name, _get_run_state
-from autox_tools.s3.cli import _paginate_objects
+from autox_tools.pipelines._kfp import get_pipeline_name, get_run_state
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ def find_rag_patterns_prefix(
     The folder sits at an unpredictable depth (e.g.
     ``<prefix>/<component>/<task-id>/rag_patterns/``).
     """
-    result = _paginate_objects(s3_client, bucket, key_prefix, max_keys=200)
+    result = paginate_objects(s3_client, bucket, key_prefix, max_keys=200)
     for obj in result.get("Contents", []):
         key: str = obj["Key"]
         idx = key.find("/rag_patterns/")
@@ -102,7 +103,7 @@ def discover_patterns(
     Returns names in natural sort order so ``Pattern2`` appears before
     ``Pattern11``.
     """
-    result = _paginate_objects(s3_client, bucket, rag_prefix, delimiter="/")
+    result = paginate_objects(s3_client, bucket, rag_prefix, delimiter="/")
     patterns: list[str] = []
     for cp in result.get("CommonPrefixes", []):
         name = cp["Prefix"][len(rag_prefix):].rstrip("/")
@@ -176,17 +177,24 @@ def fetch_pattern_metrics(
 def fetch_all_pattern_metrics(
     s3_client: Any, bucket: str, prefix: str,
 ) -> list[PatternMetrics]:
-    """Discover all RAG patterns under *prefix* and fetch their metrics."""
+    """Discover all RAG patterns under *prefix* and fetch their metrics.
+
+    Pattern downloads run concurrently (boto3 clients are thread-safe).
+    """
     rag_prefix = find_rag_patterns_prefix(s3_client, bucket, prefix)
     if not rag_prefix:
         return []
     names = discover_patterns(s3_client, bucket, rag_prefix)
-    patterns: list[PatternMetrics] = []
-    for name in names:
-        pm = fetch_pattern_metrics(s3_client, bucket, rag_prefix, name)
-        if pm is not None:
-            patterns.append(pm)
-    return patterns
+    if not names:
+        return []
+
+    def _fetch(name: str) -> PatternMetrics | None:
+        return fetch_pattern_metrics(s3_client, bucket, rag_prefix, name)
+
+    with ThreadPoolExecutor(max_workers=min(len(names), 8)) as pool:
+        results = pool.map(_fetch, names)
+
+    return [pm for pm in results if pm is not None]
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +300,7 @@ def _find_summary_results(
         if data is not None:
             return data, key
 
-    result = _paginate_objects(s3_client, bucket, norm)
+    result = paginate_objects(s3_client, bucket, norm)
     eval_key: str | None = None
     metrics_key: str | None = None
     for obj in result.get("Contents", []):
@@ -338,8 +346,8 @@ def _extract_run_metadata(
 
     run_obj = getattr(run, "run", run)
 
-    result["pipeline_name"] = _get_pipeline_name(run_obj)
-    result["state"] = _get_run_state(run_obj)
+    result["pipeline_name"] = get_pipeline_name(run_obj)
+    result["state"] = get_run_state(run_obj)
     result["display_name"] = (
         getattr(run_obj, "display_name", None)
         or getattr(run_obj, "name", None)

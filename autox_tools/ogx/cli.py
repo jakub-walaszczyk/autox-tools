@@ -14,12 +14,12 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from autox_tools._output import human_size, print_json
 from autox_tools.ogx._client import connect
 
 if TYPE_CHECKING:
@@ -30,30 +30,12 @@ if TYPE_CHECKING:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _print_json(data: object) -> None:
-    print(json.dumps(data, indent=2, default=str))
-
 
 def _format_ts(unix_ts: int | float | None) -> str:
     """Format a Unix timestamp as a human-readable UTC string."""
     if unix_ts is None:
         return "—"
     return datetime.fromtimestamp(int(unix_ts), tz=UTC).strftime("%Y-%m-%d %H:%M")
-
-
-_SIZE_UNITS = ("B", "KB", "MB", "GB", "TB")
-
-
-def _human_size(nbytes: int | None) -> str:
-    """Format byte count as a human-readable string."""
-    if nbytes is None:
-        return "—"
-    size = float(nbytes)
-    for unit in _SIZE_UNITS[:-1]:
-        if abs(size) < 1024.0:
-            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
-        size /= 1024.0
-    return f"{size:.1f} {_SIZE_UNITS[-1]}"
 
 
 def _model_type(model: object) -> str:
@@ -104,7 +86,7 @@ def cmd_models(client: OgxClient, args: argparse.Namespace) -> None:
         models = [m for m in models if _model_type(m) == args.type]
 
     if args.json:
-        _print_json({
+        print_json({
             "total": len(models),
             "models": [
                 {
@@ -195,7 +177,7 @@ def cmd_info(client: OgxClient, args: argparse.Namespace) -> None:
             data["max_tokens"] = max_out
         if meta:
             data["metadata"] = meta
-        _print_json(data)
+        print_json(data)
         return
 
     fields: list[tuple[str, str]] = [("Model", mid)]
@@ -240,7 +222,7 @@ def cmd_providers(client: OgxClient, args: argparse.Namespace) -> None:
     )
 
     if args.json:
-        _print_json({
+        print_json({
             "total": len(providers),
             "providers": [
                 {
@@ -294,7 +276,7 @@ def cmd_vs_list(client: OgxClient, args: argparse.Namespace) -> None:
     stores = sorted(response.data, key=lambda vs: vs.name or vs.id)
 
     if args.json:
-        _print_json({
+        print_json({
             "total": len(stores),
             "vector_stores": [
                 {
@@ -340,7 +322,7 @@ def cmd_vs_list(client: OgxClient, args: argparse.Namespace) -> None:
     for vs in stores:
         name = vs.name or "—"
         files = vs.file_counts.total if vs.file_counts else 0
-        usage = _human_size(vs.usage_bytes)
+        usage = human_size(vs.usage_bytes)
         created = _format_ts(vs.created_at)
         print(
             f"  {name:<{max_name}}   {vs.id:<{max_sid}}   {vs.status:<{max_status}}"
@@ -409,7 +391,7 @@ def cmd_health(client: OgxClient, args: argparse.Namespace) -> None:
         version = "unknown"
 
     if args.json:
-        _print_json({"status": health.status, "version": version})
+        print_json({"status": health.status, "version": version})
         return
 
     print(f"Status  : {health.status}")
@@ -563,7 +545,7 @@ def cmd_check(client: OgxClient, args: argparse.Namespace) -> None:
 
         result = _run_check(client, model_id, mtype, provider, prompt, input_text)
         if args.json:
-            _print_json(result)
+            print_json(result)
         else:
             _print_check_result(result)
         return
@@ -586,7 +568,7 @@ def cmd_check(client: OgxClient, args: argparse.Namespace) -> None:
         results.append(_run_check(client, m.id, mtype, provider, prompt, input_text))
 
     if args.json:
-        _print_json({"total": len(results), "results": results})
+        print_json({"total": len(results), "results": results})
     else:
         _print_check_summary(results)
 

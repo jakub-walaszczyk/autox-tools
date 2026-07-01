@@ -8,15 +8,9 @@ AutoML evaluation pipeline matures.
 from __future__ import annotations
 
 import argparse
-import json
-import sys
 from typing import Any
 
-
-def _print_json(data: Any) -> None:
-    """Dump *data* as pretty-printed JSON to stdout."""
-    json.dump(data, sys.stdout, indent=2, default=str)
-    print()
+from autox_tools._output import print_json
 
 
 def cmd_info(args: argparse.Namespace) -> None:
@@ -27,7 +21,7 @@ def cmd_info(args: argparse.Namespace) -> None:
         "subcommands": ["info"],
     }
     if args.json:
-        _print_json(info)
+        print_json(info)
     else:
         print("AutoML CLI")
         print("=" * 40)

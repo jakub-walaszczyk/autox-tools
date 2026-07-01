@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from autox_tools._output import format_duration
+
 if TYPE_CHECKING:
     from datetime import datetime
 
@@ -11,8 +13,6 @@ if TYPE_CHECKING:
 
 MAX_WIDTH = 100
 SEPARATOR = "=" * MAX_WIDTH
-
-_SIZE_UNITS = ("B", "KB", "MB", "GB", "TB")
 
 LOWER_IS_BETTER_KEYWORDS = {"latency", "error", "loss", "time", "duration", "cost"}
 
@@ -41,27 +41,6 @@ def filter_metric_names(names: list[str]) -> list[str]:
 def filter_metric_dict(metrics: dict[str, float]) -> dict[str, float]:
     """Remove excluded metrics from a metric dictionary."""
     return {k: v for k, v in metrics.items() if not _is_excluded_metric(k)}
-
-
-def format_size(size_bytes: int) -> str:
-    """Format byte count as human-readable string."""
-    size = float(size_bytes)
-    for unit in _SIZE_UNITS[:-1]:
-        if abs(size) < 1024.0:
-            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
-        size /= 1024.0
-    return f"{size:.1f} {_SIZE_UNITS[-1]}"
-
-
-def format_duration(seconds: float) -> str:
-    """Format seconds as human-readable duration."""
-    if seconds < 60:
-        return f"{seconds:.0f}s"
-    minutes, secs = divmod(int(seconds), 60)
-    if minutes < 60:
-        return f"{minutes}m {secs}s"
-    hours, mins = divmod(minutes, 60)
-    return f"{hours}h {mins}m {secs}s"
 
 
 def delta_indicator(value: float, lower_is_better: bool = False) -> str:

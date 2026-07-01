@@ -12,121 +12,23 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 import time
 from typing import Any
 
-from autox_tools.pipelines._filters import is_user_task
-from autox_tools.pipelines._kfp import connect as kfp_connect
+from autox_tools._output import format_duration, print_json
+from autox_tools.pipelines._kfp import (
+    connect as kfp_connect,
+)
+from autox_tools.pipelines._kfp import (
+    extract_tasks,
+    get_pipeline_name,
+    get_run_state,
+    is_terminal,
+)
 
-_TERMINAL_STATES = {"succeeded", "failed", "skipped", "error"}
 _MAX_ERROR_LEN = 200
-_RUN_CONFIG_REQUIRED_KEYS = {"pipeline_package"}
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _print_json(data: object) -> None:
-    print(json.dumps(data, indent=2, default=str))
-
-
-def _format_duration(seconds: float) -> str:
-    """Format seconds into a human-readable duration string."""
-    if seconds < 60:
-        return f"{int(seconds)}s"
-    minutes, secs = divmod(int(seconds), 60)
-    if minutes < 60:
-        return f"{minutes}m{secs}s"
-    hours, mins = divmod(minutes, 60)
-    return f"{hours}h{mins}m{secs}s"
-
-
-def _extract_tasks(run_details: Any, pipeline_name: str | None = None) -> list[dict[str, Any]]:
-    """Extract user-visible tasks from KFP run details."""
-    tasks: list[dict[str, Any]] = []
-
-    task_details = getattr(run_details, "task_details", None)
-    if not task_details:
-        return tasks
-
-    for task in task_details:
-        display_name = getattr(task, "display_name", "") or getattr(task, "task_name", "") or ""
-        if not display_name or not is_user_task(display_name, pipeline_name):
-            continue
-
-        state: Any = getattr(task, "state", None) or getattr(task, "status", "Unknown")
-        if hasattr(state, "value"):
-            state = state.value
-        state_str = str(state)
-
-        error_msg = getattr(task, "error", None) or ""
-        child_tasks = getattr(task, "child_tasks", None) or []
-        pod_name = getattr(task, "pod_name", None) or ""
-
-        tasks.append({
-            "name": display_name,
-            "state": state_str,
-            "error": str(error_msg) if error_msg else "",
-            "child_task_ids": [str(ct) for ct in child_tasks] if child_tasks else [],
-            "pod_name": pod_name,
-        })
-
-    return tasks
-
-
-def _get_run_state(run: Any) -> str:
-    """Extract the run state string from a KFP run object."""
-    state: Any = getattr(run, "state", None) or getattr(run, "status", None)
-    if state is None:
-        status = getattr(run, "status", None)
-        if status is not None and hasattr(status, "state"):
-            state = status.state
-    if state is not None and hasattr(state, "value"):
-        state = state.value
-    return str(state) if state else "Unknown"
-
-
-def _get_pipeline_name(run: Any) -> str | None:
-    """Extract the pipeline name from a run object.
-
-    Supports both KFP v1 (``pipeline_spec.pipeline_name``) and KFP v2 IR
-    (``pipeline_spec.pipeline_spec.pipelineInfo.name``).
-    """
-    spec = getattr(run, "pipeline_spec", None)
-    if spec is None:
-        return None
-
-    if isinstance(spec, dict):
-        # KFP v1: top-level key
-        v1 = spec.get("pipeline_name")
-        if v1:
-            return str(v1)
-        # KFP v2 IR: nested under pipeline_spec -> pipelineInfo -> name
-        inner = spec.get("pipeline_spec", {})
-        if isinstance(inner, dict):
-            info = inner.get("pipelineInfo") or inner.get("pipeline_info") or {}
-            if isinstance(info, dict) and info.get("name"):
-                return str(info["name"])
-        return None
-
-    # Object-style access (protobuf / SDK model)
-    v1 = getattr(spec, "pipeline_name", None)
-    if v1:
-        return str(v1)
-    inner = getattr(spec, "pipeline_spec", None)
-    if inner is not None:
-        info = getattr(inner, "pipelineInfo", None) or getattr(inner, "pipeline_info", None)
-        if info is not None:
-            return getattr(info, "name", None)
-    return None
-
-
-def _is_terminal(state: str) -> bool:
-    return state.lower() in _TERMINAL_STATES
 
 
 # ---------------------------------------------------------------------------
@@ -138,18 +40,18 @@ def cmd_status(kfp_client: Any, args: argparse.Namespace, **_: Any) -> None:
     run = kfp_client.get_run(args.run_id)
     run_obj = getattr(run, "run", run)
 
-    state = _get_run_state(run_obj)
-    pipeline_name = _get_pipeline_name(run_obj)
+    state = get_run_state(run_obj)
+    pipeline_name = get_pipeline_name(run_obj)
 
     start_time = getattr(run_obj, "created_at", None)
     end_time = getattr(run_obj, "finished_at", None)
     error = getattr(run_obj, "error", None) or ""
 
     run_details = getattr(run, "run_details", None) or run_obj
-    tasks = _extract_tasks(run_details, pipeline_name)
+    tasks = extract_tasks(run_details, pipeline_name)
 
     if args.json:
-        _print_json({
+        print_json({
             "run_id": args.run_id,
             "state": state,
             "pipeline_name": pipeline_name,
@@ -201,19 +103,19 @@ def cmd_list(kfp_client: Any, args: argparse.Namespace, **_: Any) -> None:
 
     if args.state:
         target = args.state.lower()
-        runs = [r for r in runs if _get_run_state(r).lower() == target]
+        runs = [r for r in runs if get_run_state(r).lower() == target]
 
     if args.json:
         rows = []
         for r in runs:
             run_id = getattr(r, "run_id", None) or getattr(r, "id", "")
             name = getattr(r, "display_name", None) or getattr(r, "name", "")
-            state = _get_run_state(r)
+            state = get_run_state(r)
             created = getattr(r, "created_at", None)
             finished = getattr(r, "finished_at", None)
             duration = None
             if created and finished:
-                duration = _format_duration((finished - created).total_seconds())
+                duration = format_duration((finished - created).total_seconds())
             rows.append({
                 "run_id": str(run_id),
                 "name": name,
@@ -221,7 +123,7 @@ def cmd_list(kfp_client: Any, args: argparse.Namespace, **_: Any) -> None:
                 "created": str(created) if created else None,
                 "duration": duration,
             })
-        _print_json(rows)
+        print_json(rows)
         return
 
     if not runs:
@@ -232,13 +134,13 @@ def cmd_list(kfp_client: Any, args: argparse.Namespace, **_: Any) -> None:
     for r in runs:
         run_id = str(getattr(r, "run_id", None) or getattr(r, "id", ""))
         name = getattr(r, "display_name", None) or getattr(r, "name", "")
-        state = _get_run_state(r)
+        state = get_run_state(r)
         created = getattr(r, "created_at", None)
         finished = getattr(r, "finished_at", None)
         created_str = str(created)[:19] if created else ""
         duration = ""
         if created and finished:
-            duration = _format_duration((finished - created).total_seconds())
+            duration = format_duration((finished - created).total_seconds())
         entries.append((run_id, str(name), state, created_str, duration))
 
     col_widths = [
@@ -279,7 +181,7 @@ def _print_run_summary(
     print(f"  {icon}  Pipeline run finished — {state.upper()}")
     print(border)
     print(f"  Run ID   : {run_id}")
-    print(f"  Duration : {_format_duration(elapsed)}")
+    print(f"  Duration : {format_duration(elapsed)}")
 
     if tasks:
         print(f"  Tasks    : {len(tasks)}")
@@ -313,23 +215,23 @@ def cmd_watch(kfp_client: Any, args: argparse.Namespace, **_: Any) -> None:
     while True:
         elapsed = time.monotonic() - start
         if elapsed > timeout:
-            print(f"\n[pipelines] Timeout after {_format_duration(timeout)}.")
+            print(f"\n[pipelines] Timeout after {format_duration(timeout)}.")
             sys.exit(2)
 
         run = kfp_client.get_run(run_id)
         run_obj = getattr(run, "run", run)
-        state = _get_run_state(run_obj)
-        pipeline_name = _get_pipeline_name(run_obj)
+        state = get_run_state(run_obj)
+        pipeline_name = get_pipeline_name(run_obj)
 
         run_details = getattr(run, "run_details", None) or run_obj
-        tasks = _extract_tasks(run_details, pipeline_name)
+        tasks = extract_tasks(run_details, pipeline_name)
 
         if is_tty and prev_line_count > 0:
             sys.stdout.write(f"\033[{prev_line_count}A\033[J")
 
         sys.stdout.write(
             f"[pipelines] run={run_id[:12]}... state={state} "
-            f"elapsed={_format_duration(elapsed)}\n"
+            f"elapsed={format_duration(elapsed)}\n"
         )
 
         if tasks:
@@ -340,894 +242,12 @@ def cmd_watch(kfp_client: Any, args: argparse.Namespace, **_: Any) -> None:
         sys.stdout.flush()
         prev_line_count = 1 + len(tasks)
 
-        if _is_terminal(state):
+        if is_terminal(state):
             _print_run_summary(run_id, state, elapsed, tasks, run_obj)
             exit_code = 0 if state.lower() == "succeeded" else 1
             sys.exit(exit_code)
 
         time.sleep(interval)
-
-
-def _list_run_pods(k8s_api: Any, namespace: str, run_id: str) -> list[Any]:
-    """List all pods for a pipeline run.
-
-    Merges results from two discovery methods so that both driver and impl
-    pods are found even when only one kind carries the KFP label:
-
-    1. Label selector ``pipeline/runid=<run_id>``
-    2. Namespace-wide list filtered by run ID in the pod name
-    """
-    seen: dict[str, Any] = {}
-
-    try:
-        pods = k8s_api.list_namespaced_pod(
-            namespace=namespace,
-            label_selector=f"pipeline/runid={run_id}",
-            _request_timeout=30,
-        )
-        for p in (pods.items if hasattr(pods, "items") else []):
-            name = (p.metadata.name or "") if p.metadata else ""
-            if name:
-                seen[name] = p
-    except Exception as exc:
-        _exit_k8s_error(exc, namespace)
-
-    try:
-        pods = k8s_api.list_namespaced_pod(
-            namespace=namespace, _request_timeout=30,
-        )
-        for p in (pods.items if hasattr(pods, "items") else []):
-            name = (p.metadata.name or "") if p.metadata else ""
-            if name and name not in seen and run_id in name:
-                seen[name] = p
-    except Exception as exc:
-        if not seen:
-            _exit_k8s_error(exc, namespace)
-
-    return list(seen.values())
-
-
-def _exit_k8s_error(exc: Exception, namespace: str) -> None:
-    """Exit with an actionable K8S API error message."""
-    exc_str = str(exc)
-    if "403" in exc_str or "Forbidden" in exc_str:
-        sys.exit(
-            f"K8S API returned 403 Forbidden for namespace '{namespace}'.\n"
-            "The token (RHOAI_TOKEN) lacks permission to list pods or read logs.\n"
-            "Verify that the token's service account has 'get'/'list' on pods "
-            "and 'get' on pods/log in this namespace."
-        )
-    sys.exit(f"Failed to query K8S API: {exc}")
-
-
-_SKIP_CONTAINERS = {"wait"}
-
-_POD_COMPONENT_LABEL_KEYS = [
-    "pipelines.kubeflow.org/component_name",
-    "pipelines.kubeflow.org/v2_component_name",
-    "component_name",
-]
-
-_POD_COMPONENT_ANNOTATION_KEYS = [
-    "pipelines.kubeflow.org/component_name",
-    "pipelines.kubeflow.org/v2_component_name",
-    "pipelines.kubeflow.org/task_name",
-]
-
-
-def _normalize_component_name(name: str) -> str:
-    """Normalize a KFP component/task name for fuzzy matching.
-
-    Strips the ``comp-`` prefix added by KFP v2 and unifies separators.
-    """
-    n = name.lower().strip()
-    if n.startswith("comp-"):
-        n = n[5:]
-    return n.replace("_", "-").replace(" ", "-")
-
-
-def _match_pod_to_task(
-    pod_name: str,
-    labels: dict[str, str],
-    annotations: dict[str, str],
-    task_names: set[str],
-) -> str | None:
-    """Match a pod to a task using labels, annotations, and pod name."""
-    normalized_lookup = {_normalize_component_name(t): t for t in task_names}
-
-    for key in _POD_COMPONENT_LABEL_KEYS + _POD_COMPONENT_ANNOTATION_KEYS:
-        value = labels.get(key, "") or annotations.get(key, "")
-        if not value:
-            continue
-        if value in task_names:
-            return value
-        norm = _normalize_component_name(value)
-        if norm in normalized_lookup:
-            return normalized_lookup[norm]
-
-    for tname in task_names:
-        normalized = _normalize_component_name(tname)
-        if normalized in pod_name:
-            return tname
-
-    return None
-
-
-def _is_pod_failed(pod: Any) -> bool:
-    """Return True if a pod is in a failed state (phase or container exit code)."""
-    phase = ((pod.status.phase or "") if pod.status else "").lower()
-    if phase == "failed":
-        return True
-    for cs in (pod.status.container_statuses or []) if pod.status else []:
-        terminated = cs.state.terminated if cs.state else None
-        if terminated and terminated.exit_code != 0:
-            return True
-    return False
-
-
-def _prefer_impl_pod(
-    pod_name: str,
-    pods_by_name: dict[str, Any],
-) -> tuple[str, Any]:
-    """Resolve a driver pod to its impl counterpart when available.
-
-    KFP v2 records the driver pod on ``task.pod_name``, but user code runs
-    in the impl pod.  When *pod_name* ends with a ``-driver`` segment, this
-    looks for a sibling pod whose name shares the same prefix and contains
-    ``-impl-``.  Returns ``(resolved_name, pod_object)``.
-    """
-    pod = pods_by_name.get(pod_name)
-
-    parts = pod_name.rsplit("-driver", 1)
-    if len(parts) < 2:
-        return pod_name, pod
-
-    prefix = parts[0]
-    for candidate_name, candidate_pod in pods_by_name.items():
-        if candidate_name.startswith(prefix) and "-impl-" in candidate_name:
-            return candidate_name, candidate_pod
-
-    return pod_name, pod
-
-
-def _find_exec_pods(pod_items: list[Any], prefer_failed: bool) -> list[Any]:
-    """Select execution pods for the fallback log dump.
-
-    Prefers ``*-impl-*`` pods (where user code runs in KFP v2) over driver
-    pods.  When *prefer_failed* is True, further narrows to failed pods.
-    """
-    impl_pods = [p for p in pod_items if "-impl-" in (p.metadata.name or "")]
-    pool = impl_pods or pod_items
-
-    if prefer_failed:
-        failed = [p for p in pool if _is_pod_failed(p)]
-        if failed:
-            return failed
-
-    return pool
-
-
-def _fetch_pod_logs(
-    k8s_api: Any,
-    pod_name: str,
-    namespace: str,
-    container_names: list[str],
-    container_statuses: list[Any],
-    tail: int,
-) -> list[dict[str, str]]:
-    """Fetch logs from all non-skipped containers in a pod."""
-    containers_logs: list[dict[str, str]] = []
-
-    for cname in container_names:
-        if cname in _SKIP_CONTAINERS:
-            continue
-
-        try:
-            log_text = k8s_api.read_namespaced_pod_log(
-                name=pod_name,
-                namespace=namespace,
-                container=cname,
-                tail_lines=tail,
-                _request_timeout=60,
-            )
-        except Exception as exc:
-            exc_str = str(exc)
-            if "403" in exc_str or "Forbidden" in exc_str:
-                log_text = "(403 Forbidden -- token lacks pods/log access)"
-            else:
-                log_text = f"(log unavailable: {exc_str[:120]})"
-
-        containers_logs.append({"name": cname, "logs": log_text or "(empty)"})
-
-        cs = next((s for s in container_statuses if s.name == cname), None)
-        waiting_reason = ""
-        if cs and cs.state and cs.state.waiting:
-            waiting_reason = cs.state.waiting.reason or ""
-        if waiting_reason in {"CrashLoopBackOff", "Error", "OOMKilled"}:
-            try:
-                prev_log = k8s_api.read_namespaced_pod_log(
-                    name=pod_name,
-                    namespace=namespace,
-                    container=cname,
-                    tail_lines=tail,
-                    previous=True,
-                    _request_timeout=60,
-                )
-                containers_logs.append({
-                    "name": f"{cname} (previous)",
-                    "logs": prev_log or "(empty)",
-                })
-            except Exception:
-                pass
-
-    return containers_logs
-
-
-def cmd_logs(kfp_client: Any, args: argparse.Namespace, **kwargs: Any) -> None:
-    """Fetch pod logs for pipeline tasks."""
-    from autox_tools.pipelines._k8s import connect as k8s_connect
-
-    k8s_api = kwargs.get("k8s_api")
-    if k8s_api is None:
-        k8s_api = k8s_connect(os.getenv("RHOAI_KFP_URL"))
-
-    namespace = os.getenv("RHOAI_PROJECT_NAME", "")
-    if not namespace:
-        sys.exit("RHOAI_PROJECT_NAME is required for the logs command.")
-
-    try:
-        run = kfp_client.get_run(args.run_id)
-    except Exception as exc:
-        exc_str = str(exc)
-        if "403" in exc_str or "Forbidden" in exc_str:
-            sys.exit(
-                f"KFP API returned 403 for run '{args.run_id}'.\n"
-                "The token may lack access to this run's namespace or experiment."
-            )
-        sys.exit(f"Failed to get run details: {exc}")
-
-    run_obj = getattr(run, "run", run)
-    pipeline_name = _get_pipeline_name(run_obj)
-
-    run_details = getattr(run, "run_details", None) or run_obj
-    tasks = _extract_tasks(run_details, pipeline_name)
-
-    if not args.all:
-        failed_tasks = [t for t in tasks if t["state"].lower() in {"failed", "error"}]
-        if failed_tasks:
-            tasks = failed_tasks
-        else:
-            print(f"No failed tasks in run {args.run_id}. All components:")
-            for t in tasks:
-                print(f"  {t['name']:<40} {t['state']}")
-            print("\nUse --all to fetch logs from all components.")
-            return
-
-    pod_items = _list_run_pods(k8s_api, namespace, args.run_id)
-
-    if not pod_items:
-        print(f"No pods found for run {args.run_id} in namespace '{namespace}'.")
-        print("Check that the run ID is correct and pods have not been garbage-collected.")
-        return
-
-    pods_by_name: dict[str, Any] = {
-        (p.metadata.name or ""): p for p in pod_items
-    }
-    task_names_set = {t["name"] for t in tasks}
-    results: list[dict[str, Any]] = []
-
-    # Strategy 1: use pod_name from KFP task details, preferring impl pods
-    matched_tasks: set[str] = set()
-    for t in tasks:
-        task_pod = t.get("pod_name", "")
-        if not task_pod:
-            continue
-
-        if task_pod not in pods_by_name:
-            continue
-
-        resolved_name, pod = _prefer_impl_pod(task_pod, pods_by_name)
-
-        matched_tasks.add(t["name"])
-        cstatuses = []
-        if pod.status and pod.status.container_statuses:
-            cstatuses = pod.status.container_statuses
-        cnames = [c.name for c in (pod.spec.containers or [])] if pod.spec else ["main"]
-        clogs = _fetch_pod_logs(k8s_api, resolved_name, namespace, cnames, cstatuses, args.tail)
-
-        results.append({
-            "name": t["name"],
-            "state": t["state"],
-            "pod": resolved_name,
-            "containers": clogs,
-        })
-
-    # Strategy 2: for tasks without pod_name, match pods via labels/annotations/name
-    # Sort so impl pods are visited before driver pods — first match wins.
-    unmatched_tasks = task_names_set - matched_tasks
-    if unmatched_tasks:
-        sorted_pods = sorted(
-            pod_items,
-            key=lambda p: 0 if "-impl-" in (p.metadata.name or "") else 1,
-        )
-        for pod in sorted_pods:
-            pname = pod.metadata.name or ""
-            if pname in {r["pod"] for r in results}:
-                continue
-
-            labels = (pod.metadata.labels or {}) if pod.metadata else {}
-            annotations = (pod.metadata.annotations or {}) if pod.metadata else {}
-            matched = _match_pod_to_task(pname, labels, annotations, unmatched_tasks)
-
-            if not matched:
-                continue
-
-            unmatched_tasks.discard(matched)
-            task_state = next((t["state"] for t in tasks if t["name"] == matched), "Unknown")
-            cstatuses = []
-            if pod.status and pod.status.container_statuses:
-                cstatuses = pod.status.container_statuses
-            cnames = [c.name for c in (pod.spec.containers or [])] if pod.spec else ["main"]
-            clogs = _fetch_pod_logs(k8s_api, pname, namespace, cnames, cstatuses, args.tail)
-
-            results.append({
-                "name": matched,
-                "state": task_state,
-                "pod": pname,
-                "containers": clogs,
-            })
-
-    # Strategy 3: fallback — show logs from execution pods when mapping fails
-    if not results and pod_items:
-        failed_states = {"failed", "error"}
-        want_failed = any(t["state"].lower() in failed_states for t in tasks)
-        exec_pods = _find_exec_pods(pod_items, want_failed)
-
-        for pod in exec_pods:
-            pname = pod.metadata.name or ""
-            phase = (pod.status.phase or "Unknown") if pod.status else "Unknown"
-            cstatuses = []
-            if pod.status and pod.status.container_statuses:
-                cstatuses = pod.status.container_statuses
-            cnames = [c.name for c in (pod.spec.containers or [])] if pod.spec else ["main"]
-            clogs = _fetch_pod_logs(k8s_api, pname, namespace, cnames, cstatuses, args.tail)
-
-            results.append({
-                "name": f"(unmatched pod, phase={phase})",
-                "state": phase,
-                "pod": pname,
-                "containers": clogs,
-            })
-
-    if args.json:
-        _print_json({"run_id": args.run_id, "tasks": results})
-        return
-
-    if not results:
-        print(f"No pod logs found for run {args.run_id}.")
-        print(f"\n  {len(pod_items)} pod(s) found but none matched the requested components.")
-        print(f"  Looking for: {', '.join(sorted(task_names_set))}")
-        print("\n  Pods in this run:")
-        for pod in pod_items[:15]:
-            pn = pod.metadata.name or "(unnamed)"
-            pl = (pod.metadata.labels or {}) if pod.metadata else {}
-            pa = (pod.metadata.annotations or {}) if pod.metadata else {}
-            comp = ""
-            for k in _POD_COMPONENT_LABEL_KEYS + _POD_COMPONENT_ANNOTATION_KEYS:
-                comp = pl.get(k, "") or pa.get(k, "")
-                if comp:
-                    break
-            suffix = f"  component={comp}" if comp else ""
-            print(f"    {pn}{suffix}")
-        if len(pod_items) > 15:
-            print(f"    ... and {len(pod_items) - 15} more")
-        return
-
-    for i, r in enumerate(results):
-        if i > 0:
-            print("\n" + "─" * 72 + "\n")
-        print(f"=== {r['name']} ({r['state']}) ===")
-        print(f"    pod: {r['pod']}")
-        for c in r["containers"]:
-            if len(r["containers"]) > 1:
-                print(f"    container: {c['name']}")
-            print()
-            print(c["logs"])
-
-
-_CATEGORY_LABELS = {
-    "evaluation": "Evaluation Results",
-    "indexing_notebooks": "Indexing Notebooks",
-    "inference_notebooks": "Inference Notebooks",
-    "leaderboard": "Leaderboard",
-    "rag_patterns": "RAG Patterns",
-    "other": "Other",
-}
-
-
-def _categorize_object(key: str) -> str:
-    """Assign an S3 object key to an artifact category.
-
-    ``rag_patterns/`` is checked first — files nested inside pattern folders
-    (notebooks, evaluation JSONs, etc.) belong to the patterns category regardless
-    of their extension.
-    """
-    if "rag_patterns" in key.lower() or "pattern.json" in key:
-        return "rag_patterns"
-    if "evaluation_results.json" in key:
-        return "evaluation"
-    if key.endswith(".ipynb") and "indexing" in key.lower():
-        return "indexing_notebooks"
-    if key.endswith(".ipynb") and "inference" in key.lower():
-        return "inference_notebooks"
-    if key.endswith(".html") or "leaderboard" in key.lower():
-        return "leaderboard"
-    return "other"
-
-
-def _match_name(query: str, names: list[str]) -> list[str]:
-    """Case-insensitive substring match; exact match preferred."""
-    q = query.lower()
-    exact = [n for n in names if n.lower() == q]
-    if exact:
-        return exact
-    return [n for n in names if q in n.lower()]
-
-
-def _discover_components(
-    s3_client: Any,
-    bucket: str,
-    key_prefix: str,
-) -> list[str]:
-    """Enumerate pipeline component folder names under the run prefix."""
-    from autox_tools.s3.cli import _paginate_objects
-
-    result = _paginate_objects(s3_client, bucket, key_prefix, delimiter="/")
-    components: list[str] = []
-    for cp in result.get("CommonPrefixes", []):
-        name = cp["Prefix"][len(key_prefix):].rstrip("/")
-        if name:
-            components.append(name)
-    return sorted(components)
-
-
-def _resolve_artifact_s3(
-    run_obj: Any,
-    pipeline_name: str,
-    *,
-    artifacts_s3_cfg: Any = None,
-) -> tuple[Any, str, str, str]:
-    """Resolve S3 client, bucket, prefix, and artifact root from KFP run config.
-
-    Returns ``(s3_client, bucket, key_prefix, artifact_root)``.
-    Exits on missing credentials or bucket.
-    """
-    runtime_config = getattr(run_obj, "runtime_config", None)
-    artifact_root = None
-    if runtime_config:
-        artifact_root = getattr(runtime_config, "pipeline_root", None)
-        if not artifact_root:
-            params = getattr(runtime_config, "parameters", {}) or {}
-            if isinstance(params, dict):
-                artifact_root = params.get("output", None)
-
-    if not artifact_root:
-        artifact_root = f"{pipeline_name}/"
-
-    from autox_tools.pipelines._artifacts_s3 import connect as artifacts_s3_connect
-
-    if artifacts_s3_cfg is not None:
-        s3_client = artifacts_s3_connect(artifacts_s3_cfg)
-    else:
-        s3_endpoint = os.getenv("ARTIFACTS_AWS_S3_ENDPOINT")
-        if not s3_endpoint:
-            sys.exit(
-                "Artifacts S3 credentials not configured -- set ARTIFACTS_AWS_S3_ENDPOINT, "
-                "ARTIFACTS_AWS_ACCESS_KEY_ID, and ARTIFACTS_AWS_SECRET_ACCESS_KEY."
-            )
-        s3_client = artifacts_s3_connect()
-
-    config_bucket = getattr(artifacts_s3_cfg, "bucket", "") if artifacts_s3_cfg else ""
-
-    if artifact_root.startswith("s3://"):
-        cleaned = artifact_root[5:]
-        parts = cleaned.split("/", 1)
-        bucket = parts[0]
-        key_prefix = parts[1] if len(parts) == 2 else ""
-    else:
-        bucket = os.getenv("ARTIFACTS_S3_BUCKET", "") or config_bucket
-        if not bucket:
-            sys.exit(
-                "ARTIFACTS_S3_BUCKET is required when the KFP run config does not "
-                "include a full s3:// artifact root.\n"
-                f"  artifact_root: {artifact_root}"
-            )
-        key_prefix = artifact_root
-
-    return s3_client, bucket, key_prefix, artifact_root
-
-
-def _refine_prefix_for_run(
-    s3_client: Any,
-    bucket: str,
-    key_prefix: str,
-    run_id: str,
-) -> str:
-    """Narrow ``key_prefix`` to include the run ID when it is not already present.
-
-    KFP's ``pipeline_root`` often points at the pipeline level
-    (``pipeline-name/``) rather than the run level
-    (``pipeline-name/run-id/``).  When that happens, S3 listings return
-    run-ID folders instead of component folders.  This helper checks for
-    the more specific path and returns it when objects exist there.
-    """
-    if run_id in key_prefix:
-        return key_prefix
-
-    from autox_tools.s3.cli import _paginate_objects
-
-    candidate = f"{key_prefix}{run_id}/"
-    probe = _paginate_objects(s3_client, bucket, candidate, max_keys=1)
-    if probe.get("Contents"):
-        return candidate
-    return key_prefix
-
-
-def _download_objects(
-    s3_client: Any,
-    bucket: str,
-    objects: list[dict[str, Any]],
-    base_prefix: str,
-    download_dir: str,
-) -> None:
-    """Download S3 objects to a local directory, preserving relative paths."""
-    from autox_tools.s3.cli import _human_size
-
-    os.makedirs(download_dir, exist_ok=True)
-    downloaded = 0
-    total_bytes = 0
-
-    for obj in objects:
-        key = obj["Key"]
-        if key.endswith("/"):
-            continue
-        rel = key[len(base_prefix):].lstrip("/") if base_prefix else key
-        local_path = os.path.join(download_dir, rel)
-        os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
-        s3_client.download_file(bucket, key, local_path)
-        downloaded += 1
-        total_bytes += obj.get("Size", 0)
-        print(f"  Downloaded: {rel} ({_human_size(obj.get('Size', 0))})")
-
-    print(f"\n  {downloaded} file(s), {_human_size(total_bytes)} total to {download_dir}/")
-
-
-def _cmd_artifacts_component(
-    s3_client: Any,
-    bucket: str,
-    key_prefix: str,
-    args: argparse.Namespace,
-) -> None:
-    """Handle ``--component`` mode: list or download a single component's artifacts."""
-    from autox_tools.s3.cli import _human_size, _paginate_objects
-
-    components = _discover_components(s3_client, bucket, key_prefix)
-    if not components:
-        print(f"No component folders found under {key_prefix}")
-        sys.exit(1)
-
-    if args.component == "all":
-        summaries: list[dict[str, Any]] = []
-        for cname in components:
-            prefix = f"{key_prefix}{cname}/"
-            result = _paginate_objects(s3_client, bucket, prefix)
-            objs = result.get("Contents", [])
-            total_size = sum(o.get("Size", 0) for o in objs)
-            summaries.append({
-                "name": cname,
-                "file_count": len(objs),
-                "total_size": total_size,
-            })
-
-        if args.json:
-            _print_json({"components": summaries, "total_components": len(summaries)})
-            return
-
-        max_name = max(len(s["name"]) for s in summaries) if summaries else 10
-        print(f"Components ({len(summaries)}):\n")
-        for s in summaries:
-            print(
-                f"  {s['name']:<{max_name}}  "
-                f"{s['file_count']:>5} file(s)  "
-                f"{_human_size(s['total_size']):>10}"
-            )
-        total_files = sum(s["file_count"] for s in summaries)
-        total_bytes = sum(s["total_size"] for s in summaries)
-        print(f"\n  Total: {len(summaries)} component(s), {total_files} file(s), {_human_size(total_bytes)}")
-        return
-
-    matched = _match_name(args.component, components)
-    if not matched:
-        print(f"Component '{args.component}' not found. Available components:")
-        for c in components:
-            print(f"  {c}")
-        sys.exit(1)
-
-    if len(matched) > 1:
-        print(f"'{args.component}' matches multiple components:")
-        for c in matched:
-            print(f"  {c}")
-        print("\nSpecify a more precise name.")
-        sys.exit(1)
-
-    comp_name = matched[0]
-    comp_prefix = f"{key_prefix}{comp_name}/"
-    result = _paginate_objects(s3_client, bucket, comp_prefix)
-    objects = result.get("Contents", [])
-
-    if args.json:
-        _print_json({
-            "component": comp_name,
-            "prefix": comp_prefix,
-            "total": len(objects),
-            "artifacts": [
-                {"key": o["Key"], "size_bytes": o.get("Size", 0)} for o in objects
-            ],
-        })
-        return
-
-    print(f"Component: {comp_name}")
-    print(f"Prefix   : {comp_prefix}\n")
-    for obj in objects:
-        rel = obj["Key"][len(comp_prefix):]
-        if not rel:
-            continue
-        print(f"  {rel:<60} {_human_size(obj.get('Size', 0)):>10}")
-    print(f"\n  {len(objects)} artifact(s)")
-
-    if args.download:
-        print()
-        _download_objects(s3_client, bucket, objects, comp_prefix, args.download)
-
-
-def cmd_artifacts(kfp_client: Any, args: argparse.Namespace, **kwargs: Any) -> None:
-    """List or download S3 artifacts from a pipeline run."""
-    artifacts_s3_cfg = kwargs.get("artifacts_s3_cfg")
-    run = kfp_client.get_run(args.run_id)
-    run_obj = getattr(run, "run", run)
-    pipeline_name = _get_pipeline_name(run_obj) or "unknown"
-
-    has_s3 = bool(os.getenv("ARTIFACTS_AWS_S3_ENDPOINT")) or artifacts_s3_cfg is not None
-    if not has_s3 and not args.component:
-        runtime_config = getattr(run_obj, "runtime_config", None)
-        artifact_root = None
-        if runtime_config:
-            artifact_root = getattr(runtime_config, "pipeline_root", None)
-        if args.json:
-            _print_json({
-                "run_id": args.run_id,
-                "artifact_root": artifact_root,
-                "note": "Artifacts S3 credentials not configured.",
-            })
-        else:
-            print(f"Artifact root: {artifact_root or 'unknown'}")
-            print(
-                "Artifacts S3 credentials not configured -- set ARTIFACTS_AWS_S3_ENDPOINT, "
-                "ARTIFACTS_AWS_ACCESS_KEY_ID, and ARTIFACTS_AWS_SECRET_ACCESS_KEY."
-            )
-        return
-
-    s3_client, bucket, key_prefix, artifact_root = _resolve_artifact_s3(
-        run_obj, pipeline_name, artifacts_s3_cfg=artifacts_s3_cfg,
-    )
-    key_prefix = _refine_prefix_for_run(s3_client, bucket, key_prefix, args.run_id)
-
-    if args.component:
-        _cmd_artifacts_component(s3_client, bucket, key_prefix, args)
-        return
-
-    _cmd_artifacts_summary(s3_client, bucket, key_prefix, args)
-
-
-def _cmd_artifacts_summary(
-    s3_client: Any,
-    bucket: str,
-    key_prefix: str,
-    args: argparse.Namespace,
-) -> None:
-    """Default mode: show a summary of artifacts with category counts."""
-    from autox_tools.s3.cli import _human_size, _paginate_objects
-
-    result = _paginate_objects(s3_client, bucket, key_prefix)
-    objects = result.get("Contents", [])
-
-    categories: dict[str, int] = {k: 0 for k in _CATEGORY_LABELS}
-    cat_sizes: dict[str, int] = {k: 0 for k in _CATEGORY_LABELS}
-
-    for obj in objects:
-        cat = _categorize_object(obj["Key"])
-        categories[cat] += 1
-        cat_sizes[cat] += obj.get("Size", 0)
-
-    total_size = sum(cat_sizes.values())
-
-    if args.json:
-        _print_json({
-            "run_id": args.run_id,
-            "bucket": bucket,
-            "prefix": key_prefix,
-            "total_artifacts": len(objects),
-            "total_size": total_size,
-            "categories": {
-                k: {"count": categories[k], "size": cat_sizes[k]}
-                for k in _CATEGORY_LABELS
-            },
-        })
-        return
-
-    print(f"Artifacts for run {args.run_id}")
-    print(f"Bucket: {bucket}  Prefix: {key_prefix}\n")
-
-    for cat_key, label in _CATEGORY_LABELS.items():
-        count = categories[cat_key]
-        if not count:
-            continue
-        print(f"  {label:<25} {count:>6} file(s)  {_human_size(cat_sizes[cat_key]):>10}")
-
-    print(f"\n  Total: {len(objects)} artifact(s), {_human_size(total_size)}")
-
-    if args.download:
-        if len(objects) > 1000:
-            print(f"\n  Downloading {len(objects)} objects...")
-        print()
-        _download_objects(s3_client, bucket, objects, key_prefix, args.download)
-
-
-# ---------------------------------------------------------------------------
-# Run - config loading and pipeline submission
-# ---------------------------------------------------------------------------
-
-def _load_run_config(config_path: str) -> dict[str, Any]:
-    """Load and validate a pipeline run config from a JSON file.
-
-    Resolves ``pipeline_package`` relative to the config file's parent
-    directory when the path is not absolute.  Exits on validation errors.
-    """
-    if not os.path.isfile(config_path):
-        sys.exit(f"Config file not found: {config_path}")
-
-    try:
-        with open(config_path) as f:
-            config = json.load(f)
-    except json.JSONDecodeError as exc:
-        sys.exit(f"Invalid JSON in {config_path}: {exc}")
-
-    if not isinstance(config, dict):
-        sys.exit(f"Config must be a JSON object, got {type(config).__name__}.")
-
-    missing = _RUN_CONFIG_REQUIRED_KEYS - config.keys()
-    if missing:
-        sys.exit(f"Missing required config keys: {', '.join(sorted(missing))}")
-
-    pipeline_path = config["pipeline_package"]
-    if not os.path.isabs(pipeline_path):
-        config_dir = os.path.dirname(os.path.abspath(config_path))
-        pipeline_path = os.path.join(config_dir, pipeline_path)
-    config["pipeline_package"] = os.path.normpath(pipeline_path)
-
-    if not os.path.isfile(config["pipeline_package"]):
-        sys.exit(f"Pipeline package not found: {config['pipeline_package']}")
-
-    params = config.get("parameters")
-    if params is not None and not isinstance(params, dict):
-        sys.exit(f"\"parameters\" must be an object, got {type(params).__name__}.")
-
-    return config
-
-
-def _apply_overrides(config: dict[str, Any], overrides: list[str] | None, run_name: str | None) -> None:
-    """Merge CLI ``--override`` and ``--run-name`` into a loaded config in place."""
-    if run_name:
-        config["run_name"] = run_name
-
-    if not overrides:
-        return
-
-    params = config.setdefault("parameters", {})
-    for entry in overrides:
-        if "=" not in entry:
-            sys.exit(f"Invalid --override format (expected KEY=VALUE): {entry}")
-        key, value = entry.split("=", 1)
-        params[key] = value
-
-
-def cmd_run(kfp_client: Any, args: argparse.Namespace, **_: Any) -> None:
-    """Submit a pipeline run from a JSON config file."""
-    config = _load_run_config(args.config)
-    _apply_overrides(config, args.override, args.run_name)
-
-    pipeline_file = config["pipeline_package"]
-    experiment_name = config.get("experiment", "Default")
-    run_name = config.get("run_name")
-    parameters = config.get("parameters", {})
-    service_account = config.get("service_account")
-
-    if args.dry_run:
-        summary = {
-            "pipeline_package": pipeline_file,
-            "experiment": experiment_name,
-            "run_name": run_name,
-            "parameters": parameters,
-            "service_account": service_account,
-            "namespace": os.getenv("RHOAI_PROJECT_NAME", ""),
-        }
-        if args.json:
-            _print_json(summary)
-        else:
-            print("Dry run — the following would be submitted:\n")
-            print(f"  Pipeline : {pipeline_file}")
-            print(f"  Experiment: {experiment_name}")
-            if run_name:
-                print(f"  Run name : {run_name}")
-            if service_account:
-                print(f"  SA       : {service_account}")
-            if parameters:
-                print("  Parameters:")
-                max_key = max(len(k) for k in parameters)
-                for k, v in sorted(parameters.items()):
-                    print(f"    {k:<{max_key}}  {v}")
-        return
-
-    if kfp_client is None:
-        sys.exit("KFP client is required for submission (remove --dry-run or set credentials).")
-
-    namespace = os.getenv("RHOAI_PROJECT_NAME", "")
-
-    submit_kwargs: dict[str, Any] = {
-        "pipeline_file": pipeline_file,
-        "arguments": parameters or None,
-        "experiment_name": experiment_name,
-        "namespace": namespace or None,
-    }
-    if run_name:
-        submit_kwargs["run_name"] = run_name
-    if service_account:
-        submit_kwargs["service_account"] = service_account
-
-    try:
-        run = kfp_client.create_run_from_pipeline_package(**submit_kwargs)
-    except FileNotFoundError:
-        sys.exit(f"Pipeline package not found: {pipeline_file}")
-    except Exception as exc:
-        exc_str = str(exc)
-        if "403" in exc_str or "Forbidden" in exc_str:
-            sys.exit(
-                "KFP API returned 403 Forbidden.\n"
-                "The token (RHOAI_TOKEN) may lack permission to create runs in "
-                f"namespace '{namespace}'."
-            )
-        sys.exit(f"Failed to submit pipeline run: {exc}")
-
-    run_id = getattr(run, "run_id", None) or getattr(run, "id", "")
-
-    if args.json:
-        _print_json({
-            "run_id": str(run_id),
-            "experiment": experiment_name,
-            "pipeline_package": pipeline_file,
-            "parameters": parameters,
-        })
-    else:
-        print(f"Run submitted: {run_id}")
-        print(f"  Experiment: {experiment_name}")
-        print(f"  Pipeline  : {os.path.basename(pipeline_file)}")
-
-    if args.watch and run_id:
-        print()
-        watch_args = argparse.Namespace(
-            run_id=str(run_id), interval=10, timeout=3600, json=args.json,
-        )
-        cmd_watch(kfp_client, watch_args)
 
 
 # ---------------------------------------------------------------------------
@@ -1302,6 +322,10 @@ def main() -> None:
     if args.command == "logs":
         from autox_tools.pipelines._k8s import connect as k8s_connect
         k8s_api = k8s_connect(cfg=rhoai_cfg) if rhoai_cfg is not None else k8s_connect(os.getenv("RHOAI_KFP_URL"))
+
+    from autox_tools.pipelines._artifacts import cmd_artifacts
+    from autox_tools.pipelines._logs import cmd_logs
+    from autox_tools.pipelines._submit import cmd_run
 
     commands: dict[str, Any] = {
         "status": cmd_status,

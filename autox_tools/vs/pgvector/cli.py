@@ -22,6 +22,7 @@ import re
 import sys
 from typing import TYPE_CHECKING
 
+from autox_tools._output import human_size, print_json
 from autox_tools.vs.pgvector._client import connect
 
 if TYPE_CHECKING:
@@ -120,20 +121,6 @@ def _match_tables(tables: list[str], pattern: str) -> list[str]:
     return sorted(t for t in tables if regex.fullmatch(t) or t.startswith(pattern))
 
 
-def _print_json(data: object) -> None:
-    print(json.dumps(data, indent=2, default=str))
-
-
-def _human_size(nbytes: int | None) -> str:
-    if nbytes is None:
-        return "---"
-    units = ("B", "KB", "MB", "GB", "TB")
-    size = float(nbytes)
-    for unit in units[:-1]:
-        if abs(size) < 1024.0:
-            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
-        size /= 1024.0
-    return f"{size:.1f} {units[-1]}"
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +138,7 @@ def cmd_list(conn: Connection, args: argparse.Namespace) -> None:
             if args.counts:
                 entry["row_count"] = _row_count(conn, name)
             rows.append(entry)
-        _print_json({"total": len(tables), "tables": rows})
+        print_json({"total": len(tables), "tables": rows})
         return
 
     print(f"Total tables with vector columns: {len(tables)}\n")
@@ -173,7 +160,7 @@ def cmd_describe(conn: Connection, args: argparse.Namespace) -> None:
     count = _row_count(conn, name)
 
     if args.json:
-        _print_json({
+        print_json({
             "table": name,
             "row_count": count,
             "columns": [
@@ -255,7 +242,7 @@ def cmd_count(conn: Connection, args: argparse.Namespace) -> None:
         rows.append({"name": name, "row_count": count})
 
     if args.json:
-        _print_json({"total_tables": len(rows), "total_rows": total_rows, "tables": rows})
+        print_json({"total_tables": len(rows), "total_rows": total_rows, "tables": rows})
         return
 
     max_name = max(len(str(r["name"])) for r in rows)
@@ -283,7 +270,7 @@ def cmd_query(conn: Connection, args: argparse.Namespace) -> None:
     results = cur.fetchall()
 
     if args.json:
-        _print_json([dict(zip(col_names, row, strict=False)) for row in results])
+        print_json([dict(zip(col_names, row, strict=False)) for row in results])
         return
 
     if not results:
@@ -353,7 +340,7 @@ def cmd_health(conn: Connection, args: argparse.Namespace) -> None:
     total_rows = sum(_row_count(conn, t) for t in tables)
 
     if args.json:
-        _print_json({
+        print_json({
             "status": "connected",
             "pg_version": pg_version,
             "pgvector_version": ext_version,
@@ -378,7 +365,7 @@ def cmd_indexes(conn: Connection, args: argparse.Namespace) -> None:
     indexes = conn.execute(_INDEX_DETAIL_SQL, (table,)).fetchall()
 
     if args.json:
-        _print_json({
+        print_json({
             "table": table,
             "indexes": [
                 {"name": i[0], "definition": i[1], "size_bytes": i[2]}
@@ -393,7 +380,7 @@ def cmd_indexes(conn: Connection, args: argparse.Namespace) -> None:
 
     print(f"Indexes for '{table}' ({len(indexes)}):\n")
     for i in indexes:
-        print(f"  - {i[0]}  ({_human_size(i[2])})")
+        print(f"  - {i[0]}  ({human_size(i[2])})")
         print(f"    {i[1]}")
     print()
 

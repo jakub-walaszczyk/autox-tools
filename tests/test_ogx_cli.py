@@ -13,8 +13,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from autox_tools._output import human_size
 from autox_tools.ogx import cli
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -192,7 +192,7 @@ class TestHelpers:
         ],
     )
     def test_human_size(self, nbytes: int | None, expected: str):
-        assert cli._human_size(nbytes) == expected
+        assert human_size(nbytes) == expected
 
     def test_format_ts_with_value(self):
         assert cli._format_ts(1_700_000_000) == "2023-11-14 22:13"

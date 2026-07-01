@@ -15,7 +15,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from autox_tools._output import format_duration
+from autox_tools.pipelines import _artifacts as artifacts_mod
 from autox_tools.pipelines import _filters, cli
+from autox_tools.pipelines import _logs as logs_mod
+from autox_tools.pipelines import _submit as submit_mod
 
 # ---------------------------------------------------------------------------
 # _filters.py tests
@@ -170,13 +174,13 @@ class TestFormatDuration:
     @pytest.mark.parametrize("seconds,expected", [
         (0, "0s"),
         (45, "45s"),
-        (60, "1m0s"),
-        (90, "1m30s"),
-        (3661, "1h1m1s"),
-        (7200, "2h0m0s"),
+        (60, "1m 0s"),
+        (90, "1m 30s"),
+        (3661, "1h 1m 1s"),
+        (7200, "2h 0m 0s"),
     ])
     def test_formatting(self, seconds, expected):
-        assert cli._format_duration(seconds) == expected
+        assert format_duration(seconds) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -419,27 +423,27 @@ class TestCmdWatch:
 
 class TestNormalizeComponentName:
     def test_strips_comp_prefix(self):
-        assert cli._normalize_component_name("comp-documents-discovery") == "documents-discovery"
+        assert logs_mod._normalize_component_name("comp-documents-discovery") == "documents-discovery"
 
     def test_lowercases_and_replaces_underscores(self):
-        assert cli._normalize_component_name("Search_Space_Preparation") == "search-space-preparation"
+        assert logs_mod._normalize_component_name("Search_Space_Preparation") == "search-space-preparation"
 
     def test_noop_for_already_normalized(self):
-        assert cli._normalize_component_name("documents-discovery") == "documents-discovery"
+        assert logs_mod._normalize_component_name("documents-discovery") == "documents-discovery"
 
     def test_strips_whitespace(self):
-        assert cli._normalize_component_name("  comp-foo  ") == "foo"
+        assert logs_mod._normalize_component_name("  comp-foo  ") == "foo"
 
 
 class TestMatchPodToTask:
     def test_exact_label_match(self):
-        result = cli._match_pod_to_task(
+        result = logs_mod._match_pod_to_task(
             "some-pod", {"component_name": "indexing"}, {}, {"indexing", "eval"},
         )
         assert result == "indexing"
 
     def test_v2_label_with_comp_prefix(self):
-        result = cli._match_pod_to_task(
+        result = logs_mod._match_pod_to_task(
             "some-pod",
             {"pipelines.kubeflow.org/v2_component_name": "comp-documents-discovery"},
             {},
@@ -448,7 +452,7 @@ class TestMatchPodToTask:
         assert result == "documents-discovery"
 
     def test_v2_annotation_with_comp_prefix(self):
-        result = cli._match_pod_to_task(
+        result = logs_mod._match_pod_to_task(
             "some-pod", {},
             {"pipelines.kubeflow.org/v2_component_name": "comp-search-space-preparation"},
             {"search-space-preparation"},
@@ -456,21 +460,21 @@ class TestMatchPodToTask:
         assert result == "search-space-preparation"
 
     def test_substring_in_pod_name(self):
-        result = cli._match_pod_to_task(
+        result = logs_mod._match_pod_to_task(
             "run-abc-rag-templates-optimization-xyz", {}, {},
             {"rag-templates-optimization"},
         )
         assert result == "rag-templates-optimization"
 
     def test_no_match_returns_none(self):
-        result = cli._match_pod_to_task(
+        result = logs_mod._match_pod_to_task(
             "pipeline-zc4fk-system-container-impl-123", {}, {},
             {"documents-discovery"},
         )
         assert result is None
 
     def test_underscore_task_name_matches_hyphenated_label(self):
-        result = cli._match_pod_to_task(
+        result = logs_mod._match_pod_to_task(
             "some-pod",
             {"pipelines.kubeflow.org/v2_component_name": "comp-test-data-loader"},
             {},
@@ -496,7 +500,7 @@ class TestCmdLogs:
 
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
             args = argparse.Namespace(run_id="test-id", tail=100, all=False, json=False)
-            cli.cmd_logs(client, args, k8s_api=MagicMock())
+            logs_mod.cmd_logs(client, args, k8s_api=MagicMock())
 
         out = capsys.readouterr().out
         assert "No failed tasks" in out
@@ -530,7 +534,7 @@ class TestCmdLogs:
 
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
             args = argparse.Namespace(run_id="test-id", tail=100, all=True, json=False)
-            cli.cmd_logs(client, args, k8s_api=k8s_api)
+            logs_mod.cmd_logs(client, args, k8s_api=k8s_api)
 
         out = capsys.readouterr().out
         assert "main log output" in out
@@ -561,7 +565,7 @@ class TestCmdLogs:
 
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
             args = argparse.Namespace(run_id="test-id", tail=100, all=False, json=False)
-            cli.cmd_logs(client, args, k8s_api=k8s_api)
+            logs_mod.cmd_logs(client, args, k8s_api=k8s_api)
 
         out = capsys.readouterr().out
         assert "=== rag-templates-optimization (Failed) ===" in out
@@ -597,7 +601,7 @@ class TestCmdLogs:
 
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
             args = argparse.Namespace(run_id="test-id", tail=100, all=True, json=False)
-            cli.cmd_logs(client, args, k8s_api=k8s_api)
+            logs_mod.cmd_logs(client, args, k8s_api=k8s_api)
 
         out = capsys.readouterr().out
         assert "=== rag-templates-optimization (Succeeded) ===" in out
@@ -632,7 +636,7 @@ class TestCmdLogs:
 
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
             args = argparse.Namespace(run_id="test-id", tail=100, all=False, json=False)
-            cli.cmd_logs(client, args, k8s_api=k8s_api)
+            logs_mod.cmd_logs(client, args, k8s_api=k8s_api)
 
         out = capsys.readouterr().out
         assert "=== documents-discovery (Failed) ===" in out
@@ -666,7 +670,7 @@ class TestCmdLogs:
 
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
             args = argparse.Namespace(run_id="test-id", tail=100, all=False, json=False)
-            cli.cmd_logs(client, args, k8s_api=k8s_api)
+            logs_mod.cmd_logs(client, args, k8s_api=k8s_api)
 
         out = capsys.readouterr().out
         assert "=== search-space-preparation (Failed) ===" in out
@@ -711,7 +715,7 @@ class TestCmdLogs:
 
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
             args = argparse.Namespace(run_id="test-id", tail=100, all=False, json=False)
-            cli.cmd_logs(client, args, k8s_api=k8s_api)
+            logs_mod.cmd_logs(client, args, k8s_api=k8s_api)
 
         out = capsys.readouterr().out
         assert "fallback error output" in out
@@ -759,7 +763,7 @@ class TestCmdLogs:
 
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
             args = argparse.Namespace(run_id="test-id", tail=100, all=False, json=False)
-            cli.cmd_logs(client, args, k8s_api=k8s_api)
+            logs_mod.cmd_logs(client, args, k8s_api=k8s_api)
 
         out = capsys.readouterr().out
         assert "impl-222" in out
@@ -808,7 +812,7 @@ class TestCmdLogs:
 
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
             args = argparse.Namespace(run_id="test-id", tail=100, all=False, json=False)
-            cli.cmd_logs(client, args, k8s_api=k8s_api)
+            logs_mod.cmd_logs(client, args, k8s_api=k8s_api)
 
         out = capsys.readouterr().out
         assert "impl-200" in out
@@ -833,7 +837,7 @@ class TestCmdLogs:
         k8s_api = MagicMock()
         k8s_api.list_namespaced_pod.side_effect = [label_response, all_response]
 
-        pods = cli._list_run_pods(k8s_api, "ns", "test-id")
+        pods = logs_mod._list_run_pods(k8s_api, "ns", "test-id")
         pod_names = {p.metadata.name for p in pods}
         assert "pipeline-test-id-driver-aaa" in pod_names
         assert "pipeline-test-id-impl-bbb" in pod_names
@@ -862,7 +866,7 @@ class TestCmdArtifactsNoS3:
 
         with patch.dict(os.environ, {}, clear=True):
             os.environ.pop("ARTIFACTS_AWS_S3_ENDPOINT", None)
-            cli.cmd_artifacts(client, _artifacts_ns())
+            artifacts_mod.cmd_artifacts(client, _artifacts_ns())
 
         out = capsys.readouterr().out
         assert "Artifacts S3 credentials not configured" in out
@@ -875,7 +879,7 @@ class TestCmdArtifactsNoS3:
 
         with patch.dict(os.environ, {}, clear=True):
             os.environ.pop("ARTIFACTS_AWS_S3_ENDPOINT", None)
-            cli.cmd_artifacts(client, _artifacts_ns(json=True))
+            artifacts_mod.cmd_artifacts(client, _artifacts_ns(json=True))
 
         import json
         result = json.loads(capsys.readouterr().out)
@@ -894,11 +898,11 @@ class TestCmdArtifactsNoS3:
             "ARTIFACTS_AWS_SECRET_ACCESS_KEY": "secret",
         }
         with patch.dict(os.environ, env, clear=True), \
-             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
-             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
-             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
+             patch("autox_tools._s3_connect.load_dotenv"), \
+             patch("autox_tools._s3_connect.find_dotenv", return_value=""), \
+             patch("autox_tools._s3_connect.boto3"), \
              pytest.raises(SystemExit, match="ARTIFACTS_S3_BUCKET is required"):
-            cli.cmd_artifacts(client, _artifacts_ns())
+            artifacts_mod.cmd_artifacts(client, _artifacts_ns())
 
 
 
@@ -909,8 +913,8 @@ class TestCmdArtifactsNoS3:
 class TestArtifactsS3Connect:
     def test_missing_env_vars_exits(self):
         with patch.dict(os.environ, {}, clear=True), \
-             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
-             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
+             patch("autox_tools._s3_connect.load_dotenv"), \
+             patch("autox_tools._s3_connect.find_dotenv", return_value=""), \
              pytest.raises(SystemExit, match="Missing required environment variables"):
             from autox_tools.pipelines._artifacts_s3 import connect
             connect()
@@ -922,9 +926,9 @@ class TestArtifactsS3Connect:
             "ARTIFACTS_AWS_SECRET_ACCESS_KEY": "art-secret",
         }
         with patch.dict(os.environ, env, clear=True), \
-             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
-             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
-             patch("autox_tools.pipelines._artifacts_s3.boto3") as mock_boto3:
+             patch("autox_tools._s3_connect.load_dotenv"), \
+             patch("autox_tools._s3_connect.find_dotenv", return_value=""), \
+             patch("autox_tools._s3_connect.boto3") as mock_boto3:
             from autox_tools.pipelines._artifacts_s3 import connect
             connect()
             _, kwargs = mock_boto3.client.call_args
@@ -943,9 +947,9 @@ class TestArtifactsS3Connect:
             "ARTIFACTS_S3_VERIFY_TLS": "false",
         }
         with patch.dict(os.environ, env, clear=True), \
-             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
-             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
-             patch("autox_tools.pipelines._artifacts_s3.boto3") as mock_boto3:
+             patch("autox_tools._s3_connect.load_dotenv"), \
+             patch("autox_tools._s3_connect.find_dotenv", return_value=""), \
+             patch("autox_tools._s3_connect.boto3") as mock_boto3:
             from autox_tools.pipelines._artifacts_s3 import connect
             connect()
             _, kwargs = mock_boto3.client.call_args
@@ -959,9 +963,9 @@ class TestArtifactsS3Connect:
             "ARTIFACTS_AWS_DEFAULT_REGION": "eu-west-1",
         }
         with patch.dict(os.environ, env, clear=True), \
-             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
-             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
-             patch("autox_tools.pipelines._artifacts_s3.boto3") as mock_boto3:
+             patch("autox_tools._s3_connect.load_dotenv"), \
+             patch("autox_tools._s3_connect.find_dotenv", return_value=""), \
+             patch("autox_tools._s3_connect.boto3") as mock_boto3:
             from autox_tools.pipelines._artifacts_s3 import connect
             connect()
             _, kwargs = mock_boto3.client.call_args
@@ -984,7 +988,7 @@ class TestCategorizeObject:
         ("prefix/other/random.csv", "other"),
     ])
     def test_categorization(self, key, expected):
-        assert cli._categorize_object(key) == expected
+        assert artifacts_mod._categorize_object(key) == expected
 
     @pytest.mark.parametrize("key", [
         "prefix/rag_patterns/P1/evaluation_results.json",
@@ -994,25 +998,25 @@ class TestCategorizeObject:
     ])
     def test_rag_patterns_takes_priority(self, key):
         """Files inside rag_patterns/ are always categorized as rag_patterns."""
-        assert cli._categorize_object(key) == "rag_patterns"
+        assert artifacts_mod._categorize_object(key) == "rag_patterns"
 
 
 class TestMatchName:
     def test_exact_match(self):
-        assert cli._match_name("Pattern_1", ["Pattern_1", "Pattern_2"]) == ["Pattern_1"]
+        assert artifacts_mod._match_name("Pattern_1", ["Pattern_1", "Pattern_2"]) == ["Pattern_1"]
 
     def test_case_insensitive(self):
-        assert cli._match_name("pattern_1", ["Pattern_1", "Pattern_2"]) == ["Pattern_1"]
+        assert artifacts_mod._match_name("pattern_1", ["Pattern_1", "Pattern_2"]) == ["Pattern_1"]
 
     def test_substring(self):
-        result = cli._match_name("Pattern", ["Pattern_1", "Pattern_2", "Default"])
+        result = artifacts_mod._match_name("Pattern", ["Pattern_1", "Pattern_2", "Default"])
         assert set(result) == {"Pattern_1", "Pattern_2"}
 
     def test_no_match(self):
-        assert cli._match_name("missing", ["Pattern_1", "Pattern_2"]) == []
+        assert artifacts_mod._match_name("missing", ["Pattern_1", "Pattern_2"]) == []
 
     def test_exact_preferred(self):
-        assert cli._match_name("Default", ["Default", "DefaultV2"]) == ["Default"]
+        assert artifacts_mod._match_name("Default", ["Default", "DefaultV2"]) == ["Default"]
 
 
 _ARTIFACTS_ENV = {
@@ -1055,12 +1059,12 @@ class TestCmdArtifactsSummary:
         kfp_client.get_run.return_value = _mock_s3_run()
 
         with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
-             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
-             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
-             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
-             patch("autox_tools.s3.cli._paginate_objects",
+             patch("autox_tools._s3_connect.load_dotenv"), \
+             patch("autox_tools._s3_connect.find_dotenv", return_value=""), \
+             patch("autox_tools._s3_connect.boto3"), \
+             patch("autox_tools.pipelines._artifacts.paginate_objects",
                     return_value={"Contents": objects, "CommonPrefixes": []}):
-            cli.cmd_artifacts(kfp_client, _artifacts_ns())
+            artifacts_mod.cmd_artifacts(kfp_client, _artifacts_ns())
 
         out = capsys.readouterr().out
         assert "Evaluation Results" in out
@@ -1075,12 +1079,12 @@ class TestCmdArtifactsSummary:
         kfp_client.get_run.return_value = _mock_s3_run()
 
         with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
-             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
-             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
-             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
-             patch("autox_tools.s3.cli._paginate_objects",
+             patch("autox_tools._s3_connect.load_dotenv"), \
+             patch("autox_tools._s3_connect.find_dotenv", return_value=""), \
+             patch("autox_tools._s3_connect.boto3"), \
+             patch("autox_tools.pipelines._artifacts.paginate_objects",
                     return_value={"Contents": objects, "CommonPrefixes": []}):
-            cli.cmd_artifacts(kfp_client, _artifacts_ns(json=True))
+            artifacts_mod.cmd_artifacts(kfp_client, _artifacts_ns(json=True))
 
         import json
         result = json.loads(capsys.readouterr().out)
@@ -1096,21 +1100,21 @@ class TestCmdArtifactsSummary:
 class TestRefinePrefixForRun:
     def test_appends_run_id_when_objects_exist(self):
         s3 = MagicMock()
-        with patch("autox_tools.s3.cli._paginate_objects",
+        with patch("autox_tools.pipelines._artifacts.paginate_objects",
                     return_value={"Contents": [{"Key": "pipe/run-1/comp/f", "Size": 1}]}):
-            result = cli._refine_prefix_for_run(s3, "bucket", "pipe/", "run-1")
+            result = artifacts_mod._refine_prefix_for_run(s3, "bucket", "pipe/", "run-1")
         assert result == "pipe/run-1/"
 
     def test_keeps_original_when_no_objects(self):
         s3 = MagicMock()
-        with patch("autox_tools.s3.cli._paginate_objects",
+        with patch("autox_tools.pipelines._artifacts.paginate_objects",
                     return_value={"Contents": []}):
-            result = cli._refine_prefix_for_run(s3, "bucket", "pipe/", "run-1")
+            result = artifacts_mod._refine_prefix_for_run(s3, "bucket", "pipe/", "run-1")
         assert result == "pipe/"
 
     def test_noop_when_run_id_already_in_prefix(self):
         s3 = MagicMock()
-        result = cli._refine_prefix_for_run(s3, "bucket", "pipe/run-1/", "run-1")
+        result = artifacts_mod._refine_prefix_for_run(s3, "bucket", "pipe/run-1/", "run-1")
         assert result == "pipe/run-1/"
 
 
@@ -1122,16 +1126,16 @@ class TestDiscoverComponents:
             {"Prefix": "pipeline/run-1/search-space-optimization/"},
             {"Prefix": "pipeline/run-1/data-preprocessing/"},
         ]
-        with patch("autox_tools.s3.cli._paginate_objects",
+        with patch("autox_tools.pipelines._artifacts.paginate_objects",
                     return_value={"CommonPrefixes": common_prefixes}):
-            result = cli._discover_components(s3, "bucket", "pipeline/run-1/")
+            result = artifacts_mod._discover_components(s3, "bucket", "pipeline/run-1/")
         assert result == ["data-preprocessing", "rag-templates-optimization", "search-space-optimization"]
 
     def test_empty_when_no_prefixes(self):
         s3 = MagicMock()
-        with patch("autox_tools.s3.cli._paginate_objects",
+        with patch("autox_tools.pipelines._artifacts.paginate_objects",
                     return_value={"CommonPrefixes": []}):
-            result = cli._discover_components(s3, "bucket", "pipeline/run-1/")
+            result = artifacts_mod._discover_components(s3, "bucket", "pipeline/run-1/")
         assert result == []
 
 
@@ -1149,15 +1153,15 @@ class TestCmdArtifactsComponent:
         ]
 
         with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
-             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
-             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
-             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
-             patch("autox_tools.pipelines.cli._refine_prefix_for_run", return_value="pipeline/run-1/"), \
-             patch("autox_tools.pipelines.cli._discover_components",
+             patch("autox_tools._s3_connect.load_dotenv"), \
+             patch("autox_tools._s3_connect.find_dotenv", return_value=""), \
+             patch("autox_tools._s3_connect.boto3"), \
+             patch("autox_tools.pipelines._artifacts._refine_prefix_for_run", return_value="pipeline/run-1/"), \
+             patch("autox_tools.pipelines._artifacts._discover_components",
                     return_value=["rag-templates-optimization", "search-space"]), \
-             patch("autox_tools.s3.cli._paginate_objects",
+             patch("autox_tools.pipelines._artifacts.paginate_objects",
                     return_value={"Contents": comp_objects, "CommonPrefixes": []}):
-            cli.cmd_artifacts(kfp_client, _artifacts_ns(component="search-space"))
+            artifacts_mod.cmd_artifacts(kfp_client, _artifacts_ns(component="search-space"))
 
         out = capsys.readouterr().out
         assert "Component: search-space" in out
@@ -1179,13 +1183,13 @@ class TestCmdArtifactsComponent:
             return {"Contents": [], "CommonPrefixes": []}
 
         with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
-             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
-             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
-             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
-             patch("autox_tools.pipelines.cli._discover_components",
+             patch("autox_tools._s3_connect.load_dotenv"), \
+             patch("autox_tools._s3_connect.find_dotenv", return_value=""), \
+             patch("autox_tools._s3_connect.boto3"), \
+             patch("autox_tools.pipelines._artifacts._discover_components",
                     return_value=["rag-templates-optimization", "search-space"]), \
-             patch("autox_tools.s3.cli._paginate_objects", side_effect=mock_paginate):
-            cli.cmd_artifacts(kfp_client, _artifacts_ns(component="all"))
+             patch("autox_tools.pipelines._artifacts.paginate_objects", side_effect=mock_paginate):
+            artifacts_mod.cmd_artifacts(kfp_client, _artifacts_ns(component="all"))
 
         out = capsys.readouterr().out
         assert "rag-templates-optimization" in out
@@ -1196,14 +1200,14 @@ class TestCmdArtifactsComponent:
         kfp_client = self._setup_mocks()
 
         with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
-             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
-             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
-             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
-             patch("autox_tools.pipelines.cli._refine_prefix_for_run", return_value="prefix/"), \
-             patch("autox_tools.pipelines.cli._discover_components",
+             patch("autox_tools._s3_connect.load_dotenv"), \
+             patch("autox_tools._s3_connect.find_dotenv", return_value=""), \
+             patch("autox_tools._s3_connect.boto3"), \
+             patch("autox_tools.pipelines._artifacts._refine_prefix_for_run", return_value="prefix/"), \
+             patch("autox_tools.pipelines._artifacts._discover_components",
                     return_value=["rag-templates-optimization", "search-space"]), \
              pytest.raises(SystemExit):
-            cli.cmd_artifacts(kfp_client, _artifacts_ns(component="nonexistent"))
+            artifacts_mod.cmd_artifacts(kfp_client, _artifacts_ns(component="nonexistent"))
 
         out = capsys.readouterr().out
         assert "rag-templates-optimization" in out
@@ -1217,15 +1221,15 @@ class TestCmdArtifactsComponent:
         mock_s3 = MagicMock()
 
         with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
-             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
-             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
-             patch("autox_tools.pipelines._artifacts_s3.boto3") as mock_boto3, \
-             patch("autox_tools.pipelines.cli._discover_components",
+             patch("autox_tools._s3_connect.load_dotenv"), \
+             patch("autox_tools._s3_connect.find_dotenv", return_value=""), \
+             patch("autox_tools._s3_connect.boto3") as mock_boto3, \
+             patch("autox_tools.pipelines._artifacts._discover_components",
                     return_value=["search-space"]), \
-             patch("autox_tools.s3.cli._paginate_objects",
+             patch("autox_tools.pipelines._artifacts.paginate_objects",
                     return_value={"Contents": comp_objects, "CommonPrefixes": []}):
             mock_boto3.client.return_value = mock_s3
-            cli.cmd_artifacts(
+            artifacts_mod.cmd_artifacts(
                 kfp_client,
                 _artifacts_ns(component="search-space", download=str(tmp_path)),
             )
@@ -1241,14 +1245,14 @@ class TestCmdArtifactsComponent:
         ]
 
         with patch.dict(os.environ, _ARTIFACTS_ENV, clear=False), \
-             patch("autox_tools.pipelines._artifacts_s3.load_dotenv"), \
-             patch("autox_tools.pipelines._artifacts_s3.find_dotenv", return_value=""), \
-             patch("autox_tools.pipelines._artifacts_s3.boto3"), \
-             patch("autox_tools.pipelines.cli._discover_components",
+             patch("autox_tools._s3_connect.load_dotenv"), \
+             patch("autox_tools._s3_connect.find_dotenv", return_value=""), \
+             patch("autox_tools._s3_connect.boto3"), \
+             patch("autox_tools.pipelines._artifacts._discover_components",
                     return_value=["search-space"]), \
-             patch("autox_tools.s3.cli._paginate_objects",
+             patch("autox_tools.pipelines._artifacts.paginate_objects",
                     return_value={"Contents": comp_objects, "CommonPrefixes": []}):
-            cli.cmd_artifacts(kfp_client, _artifacts_ns(component="search-space", json=True))
+            artifacts_mod.cmd_artifacts(kfp_client, _artifacts_ns(component="search-space", json=True))
 
         import json
         result = json.loads(capsys.readouterr().out)
@@ -1367,7 +1371,7 @@ class TestLoadRunConfig:
             "parameters": {"key": "value"},
         }))
 
-        result = cli._load_run_config(str(config))
+        result = submit_mod._load_run_config(str(config))
         assert result["pipeline_package"] == str(pipeline)
         assert result["experiment"] == "test-exp"
         assert result["parameters"] == {"key": "value"}
@@ -1380,7 +1384,7 @@ class TestLoadRunConfig:
         config = sub / "config.json"
         config.write_text(json.dumps({"pipeline_package": "my-pipeline.yaml"}))
 
-        result = cli._load_run_config(str(config))
+        result = submit_mod._load_run_config(str(config))
         assert result["pipeline_package"] == str(pipeline)
 
     def test_absolute_pipeline_path(self, tmp_path):
@@ -1389,36 +1393,36 @@ class TestLoadRunConfig:
         config = tmp_path / "config.json"
         config.write_text(json.dumps({"pipeline_package": str(pipeline)}))
 
-        result = cli._load_run_config(str(config))
+        result = submit_mod._load_run_config(str(config))
         assert result["pipeline_package"] == str(pipeline)
 
     def test_missing_config_file_exits(self):
         with pytest.raises(SystemExit, match="Config file not found"):
-            cli._load_run_config("/nonexistent/config.json")
+            submit_mod._load_run_config("/nonexistent/config.json")
 
     def test_invalid_json_exits(self, tmp_path):
         config = tmp_path / "bad.json"
         config.write_text("{not valid json")
         with pytest.raises(SystemExit, match="Invalid JSON"):
-            cli._load_run_config(str(config))
+            submit_mod._load_run_config(str(config))
 
     def test_non_object_json_exits(self, tmp_path):
         config = tmp_path / "array.json"
         config.write_text("[1, 2, 3]")
         with pytest.raises(SystemExit, match="must be a JSON object"):
-            cli._load_run_config(str(config))
+            submit_mod._load_run_config(str(config))
 
     def test_missing_required_key_exits(self, tmp_path):
         config = tmp_path / "config.json"
         config.write_text(json.dumps({"experiment": "test"}))
         with pytest.raises(SystemExit, match="pipeline_package"):
-            cli._load_run_config(str(config))
+            submit_mod._load_run_config(str(config))
 
     def test_pipeline_file_not_found_exits(self, tmp_path):
         config = tmp_path / "config.json"
         config.write_text(json.dumps({"pipeline_package": "nonexistent.yaml"}))
         with pytest.raises(SystemExit, match="Pipeline package not found"):
-            cli._load_run_config(str(config))
+            submit_mod._load_run_config(str(config))
 
     def test_invalid_parameters_type_exits(self, tmp_path):
         pipeline = tmp_path / "pipeline.yaml"
@@ -1429,7 +1433,7 @@ class TestLoadRunConfig:
             "parameters": "not-a-dict",
         }))
         with pytest.raises(SystemExit, match="must be an object"):
-            cli._load_run_config(str(config))
+            submit_mod._load_run_config(str(config))
 
 
 # ---------------------------------------------------------------------------
@@ -1439,37 +1443,37 @@ class TestLoadRunConfig:
 class TestApplyOverrides:
     def test_override_adds_parameter(self):
         config: dict[str, Any] = {"parameters": {"a": "1"}}
-        cli._apply_overrides(config, ["b=2"], None)
+        submit_mod._apply_overrides(config, ["b=2"], None)
         assert config["parameters"] == {"a": "1", "b": "2"}
 
     def test_override_replaces_parameter(self):
         config: dict[str, Any] = {"parameters": {"model": "old"}}
-        cli._apply_overrides(config, ["model=new"], None)
+        submit_mod._apply_overrides(config, ["model=new"], None)
         assert config["parameters"]["model"] == "new"
 
     def test_override_creates_parameters_dict(self):
         config: dict[str, Any] = {}
-        cli._apply_overrides(config, ["k=v"], None)
+        submit_mod._apply_overrides(config, ["k=v"], None)
         assert config["parameters"] == {"k": "v"}
 
     def test_run_name_override(self):
         config: dict[str, Any] = {"run_name": "original"}
-        cli._apply_overrides(config, None, "overridden")
+        submit_mod._apply_overrides(config, None, "overridden")
         assert config["run_name"] == "overridden"
 
     def test_invalid_override_format_exits(self):
         config: dict[str, Any] = {}
         with pytest.raises(SystemExit, match="Invalid --override format"):
-            cli._apply_overrides(config, ["no-equals-sign"], None)
+            submit_mod._apply_overrides(config, ["no-equals-sign"], None)
 
     def test_override_preserves_value_with_equals(self):
         config: dict[str, Any] = {"parameters": {}}
-        cli._apply_overrides(config, ["path=s3://bucket/key=value"], None)
+        submit_mod._apply_overrides(config, ["path=s3://bucket/key=value"], None)
         assert config["parameters"]["path"] == "s3://bucket/key=value"
 
     def test_no_overrides_noop(self):
         config: dict[str, Any] = {"parameters": {"k": "v"}}
-        cli._apply_overrides(config, None, None)
+        submit_mod._apply_overrides(config, None, None)
         assert config == {"parameters": {"k": "v"}}
 
 
@@ -1500,7 +1504,7 @@ class TestCmdRun:
             override=None, run_name=None, json=False,
         )
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
-            cli.cmd_run(None, args)
+            submit_mod.cmd_run(None, args)
 
         out = capsys.readouterr().out
         assert "Dry run" in out
@@ -1515,7 +1519,7 @@ class TestCmdRun:
             override=None, run_name=None, json=True,
         )
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
-            cli.cmd_run(None, args)
+            submit_mod.cmd_run(None, args)
 
         import json
         result = json.loads(capsys.readouterr().out)
@@ -1531,7 +1535,7 @@ class TestCmdRun:
             json=True,
         )
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
-            cli.cmd_run(None, args)
+            submit_mod.cmd_run(None, args)
 
         import json
         result = json.loads(capsys.readouterr().out)
@@ -1550,7 +1554,7 @@ class TestCmdRun:
             override=None, run_name=None, json=False,
         )
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
-            cli.cmd_run(kfp_client, args)
+            submit_mod.cmd_run(kfp_client, args)
 
         kfp_client.create_run_from_pipeline_package.assert_called_once()
         call_kwargs = kfp_client.create_run_from_pipeline_package.call_args[1]
@@ -1573,7 +1577,7 @@ class TestCmdRun:
             override=None, run_name=None, json=True,
         )
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
-            cli.cmd_run(kfp_client, args)
+            submit_mod.cmd_run(kfp_client, args)
 
         import json
         result = json.loads(capsys.readouterr().out)
@@ -1591,7 +1595,7 @@ class TestCmdRun:
             override=None, run_name=None, json=False,
         )
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False):
-            cli.cmd_run(kfp_client, args)
+            submit_mod.cmd_run(kfp_client, args)
 
         call_kwargs = kfp_client.create_run_from_pipeline_package.call_args[1]
         assert call_kwargs["service_account"] == "custom-sa"
@@ -1607,7 +1611,7 @@ class TestCmdRun:
         )
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False), \
              pytest.raises(SystemExit, match="403 Forbidden"):
-            cli.cmd_run(kfp_client, args)
+            submit_mod.cmd_run(kfp_client, args)
 
     def test_submit_no_client_exits(self, tmp_path):
         config_path = self._make_config(tmp_path)
@@ -1616,7 +1620,7 @@ class TestCmdRun:
             override=None, run_name=None, json=False,
         )
         with pytest.raises(SystemExit, match="KFP client is required"):
-            cli.cmd_run(None, args)
+            submit_mod.cmd_run(None, args)
 
     def test_submit_with_watch_delegates(self, tmp_path, capsys):
         config_path = self._make_config(tmp_path)
@@ -1633,7 +1637,7 @@ class TestCmdRun:
         )
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": "ns"}, clear=False), \
              pytest.raises(SystemExit) as exc_info:
-            cli.cmd_run(kfp_client, args)
+            submit_mod.cmd_run(kfp_client, args)
 
         assert exc_info.value.code == 0
         kfp_client.get_run.assert_called_with("watch-run-id")
@@ -1653,7 +1657,7 @@ class TestCmdRun:
             override=None, run_name=None, json=False,
         )
         with patch.dict(os.environ, {"RHOAI_PROJECT_NAME": ""}, clear=False):
-            cli.cmd_run(kfp_client, args)
+            submit_mod.cmd_run(kfp_client, args)
 
         call_kwargs = kfp_client.create_run_from_pipeline_package.call_args[1]
         assert call_kwargs["experiment_name"] == "Default"

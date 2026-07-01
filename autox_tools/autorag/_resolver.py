@@ -19,8 +19,8 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
-from autox_tools.pipelines.cli import _get_pipeline_name
-from autox_tools.s3.cli import _paginate_objects
+from autox_tools._s3_utils import paginate_objects
+from autox_tools.pipelines._kfp import get_pipeline_name
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ def resolve(
 
     logger.debug("Run params did not yield a location for %s", run_id)
 
-    pipeline_name = _get_pipeline_name(run_obj)
+    pipeline_name = get_pipeline_name(run_obj)
     bucket = explicit_bucket or os.getenv("ARTIFACTS_S3_BUCKET", "")
     if bucket:
         location = _try_scan(s3_client, bucket, run_id, pipeline_name)
@@ -136,7 +136,7 @@ def _refine_prefix(
         return location
 
     candidate = f"{location.prefix}{run_id}/"
-    probe = _paginate_objects(s3_client, location.bucket, candidate, max_keys=1)
+    probe = paginate_objects(s3_client, location.bucket, candidate, max_keys=1)
     if probe.get("Contents"):
         return ArtifactLocation(
             bucket=location.bucket,
@@ -175,7 +175,7 @@ def _try_scan(
         )
 
     for prefix in candidates:
-        probe = _paginate_objects(s3_client, bucket, prefix, max_keys=1)
+        probe = paginate_objects(s3_client, bucket, prefix, max_keys=1)
         if probe.get("Contents"):
             return ArtifactLocation(bucket=bucket, prefix=prefix, source="scan")
 

@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from autox_tools._output import human_size
 from autox_tools.autorag import _artifacts, _display, _patterns, _resolver, cli
 
 # ---------------------------------------------------------------------------
@@ -127,7 +128,7 @@ class TestListAndCategorize:
             {"Key": "pfx/", "Size": 0, "LastModified": "2026-01-01"},
         ]
         s3 = MagicMock()
-        with patch("autox_tools.autorag._artifacts._paginate_objects",
+        with patch("autox_tools.autorag._artifacts.paginate_objects",
                     return_value={"Contents": objects}):
             result = _artifacts.list_and_categorize(s3, "bucket", "pfx/")
 
@@ -138,7 +139,7 @@ class TestListAndCategorize:
 
     def test_empty_listing(self):
         s3 = MagicMock()
-        with patch("autox_tools.autorag._artifacts._paginate_objects",
+        with patch("autox_tools.autorag._artifacts.paginate_objects",
                     return_value={"Contents": []}):
             result = _artifacts.list_and_categorize(s3, "bucket", "pfx/")
         assert result == []
@@ -147,7 +148,7 @@ class TestListAndCategorize:
         dt = datetime(2026, 5, 15, 14, 30, tzinfo=UTC)
         objects = [{"Key": "pfx/file.txt", "Size": 100, "LastModified": dt}]
         s3 = MagicMock()
-        with patch("autox_tools.autorag._artifacts._paginate_objects",
+        with patch("autox_tools.autorag._artifacts.paginate_objects",
                     return_value={"Contents": objects}):
             result = _artifacts.list_and_categorize(s3, "bucket", "pfx/")
         assert "2026" in result[0].last_modified
@@ -169,7 +170,7 @@ class TestFormatSize:
         (1099511627776, "1.0 TB"),
     ])
     def test_formatting(self, nbytes, expected):
-        assert _display.format_size(nbytes) == expected
+        assert human_size(nbytes) == expected
 
 
 class TestFormatDuration:
@@ -701,14 +702,14 @@ class TestPatternDiscovery:
         objects = [
             {"Key": "pfx/comp/task-id/rag_patterns/P1/pattern.json", "Size": 100},
         ]
-        with patch("autox_tools.autorag._patterns._paginate_objects",
+        with patch("autox_tools.autorag._patterns.paginate_objects",
                     return_value={"Contents": objects}):
             result = _patterns.find_rag_patterns_prefix(s3, "bucket", "pfx/")
         assert result == "pfx/comp/task-id/rag_patterns/"
 
     def test_find_rag_patterns_prefix_not_found(self):
         s3 = MagicMock()
-        with patch("autox_tools.autorag._patterns._paginate_objects",
+        with patch("autox_tools.autorag._patterns.paginate_objects",
                     return_value={"Contents": []}):
             result = _patterns.find_rag_patterns_prefix(s3, "bucket", "pfx/")
         assert result is None
@@ -720,7 +721,7 @@ class TestPatternDiscovery:
             {"Prefix": "rag/Pattern2/"},
             {"Prefix": "rag/Pattern1/"},
         ]
-        with patch("autox_tools.autorag._patterns._paginate_objects",
+        with patch("autox_tools.autorag._patterns.paginate_objects",
                     return_value={"CommonPrefixes": common_prefixes}):
             result = _patterns.discover_patterns(s3, "bucket", "rag/")
         assert result == ["Pattern1", "Pattern2", "Pattern11"]
@@ -1065,7 +1066,7 @@ class TestResolve:
         kfp.get_run.return_value = run
         s3 = MagicMock()
 
-        with patch("autox_tools.autorag._resolver._paginate_objects",
+        with patch("autox_tools.autorag._resolver.paginate_objects",
                     return_value={"Contents": []}):
             loc = _resolver.resolve(kfp, s3, "run-1")
 
@@ -1084,7 +1085,7 @@ class TestResolve:
                 return {"Contents": [{"Key": f"{prefix}file.json", "Size": 1}]}
             return {"Contents": []}
 
-        with patch("autox_tools.autorag._resolver._paginate_objects",
+        with patch("autox_tools.autorag._resolver.paginate_objects",
                     side_effect=mock_paginate):
             loc = _resolver.resolve(kfp, s3, "run-1")
 
@@ -1097,7 +1098,7 @@ class TestResolve:
         kfp.get_run.return_value = run
         s3 = MagicMock()
 
-        with patch("autox_tools.autorag._resolver._paginate_objects",
+        with patch("autox_tools.autorag._resolver.paginate_objects",
                     return_value={"Contents": []}):
             loc = _resolver.resolve(kfp, s3, "run-1")
 
@@ -1117,7 +1118,7 @@ class TestResolve:
             return {"Contents": []}
 
         with patch.dict(os.environ, {"ARTIFACTS_S3_BUCKET": "scan-bucket"}), \
-             patch("autox_tools.autorag._resolver._paginate_objects",
+             patch("autox_tools.autorag._resolver.paginate_objects",
                    side_effect=mock_paginate):
             loc = _resolver.resolve(kfp, s3, "run-1")
 
@@ -1138,7 +1139,7 @@ class TestResolve:
             return {"Contents": []}
 
         with patch.dict(os.environ, {"ARTIFACTS_S3_BUCKET": "bucket"}), \
-             patch("autox_tools.autorag._resolver._paginate_objects",
+             patch("autox_tools.autorag._resolver.paginate_objects",
                    side_effect=mock_paginate):
             loc = _resolver.resolve(kfp, s3, "run-1")
 
@@ -1152,7 +1153,7 @@ class TestResolve:
         s3 = MagicMock()
 
         with patch.dict(os.environ, {}, clear=True), \
-             patch("autox_tools.autorag._resolver._paginate_objects",
+             patch("autox_tools.autorag._resolver.paginate_objects",
                    return_value={"Contents": []}):
             os.environ.pop("ARTIFACTS_S3_BUCKET", None)
             loc = _resolver.resolve(kfp, s3, "run-1")
@@ -1165,7 +1166,7 @@ class TestResolve:
         kfp.get_run.return_value = run
         s3 = MagicMock()
 
-        with patch("autox_tools.autorag._resolver._paginate_objects",
+        with patch("autox_tools.autorag._resolver.paginate_objects",
                     return_value={"Contents": []}):
             loc = _resolver.resolve(kfp, s3, "run-1")
 
@@ -1181,7 +1182,7 @@ class TestResolve:
         kfp.get_run.return_value = run
         s3 = MagicMock()
 
-        with patch("autox_tools.autorag._resolver._paginate_objects",
+        with patch("autox_tools.autorag._resolver.paginate_objects",
                     return_value={"Contents": []}):
             loc = _resolver.resolve(kfp, s3, "run-1")
 
@@ -1201,7 +1202,7 @@ class TestResolve:
             return {"Contents": []}
 
         with patch.dict(os.environ, {"ARTIFACTS_S3_BUCKET": "bucket"}), \
-             patch("autox_tools.autorag._resolver._paginate_objects",
+             patch("autox_tools.autorag._resolver.paginate_objects",
                    side_effect=mock_paginate):
             loc = _resolver.resolve(kfp, s3, "run-1")
 

@@ -13,62 +13,15 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
-import json
 import mimetypes
 import os
 import sys
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from autox_tools._output import human_size, print_json
+from autox_tools._s3_utils import paginate_objects
 from autox_tools.s3._client import connect
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-_SIZE_UNITS = ("B", "KB", "MB", "GB", "TB")
-
-
-def _human_size(nbytes: int) -> str:
-    """Format byte count as a human-readable string."""
-    size = float(nbytes)
-    for unit in _SIZE_UNITS[:-1]:
-        if abs(size) < 1024.0:
-            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
-        size /= 1024.0
-    return f"{size:.1f} {_SIZE_UNITS[-1]}"
-
-
-def _print_json(data: object) -> None:
-    print(json.dumps(data, indent=2, default=str))
-
-
-def _paginate_objects(client: Any, bucket: str, prefix: str, *, delimiter: str = "", max_keys: int = 0) -> dict:
-    """Paginate through list_objects_v2 and return aggregated results.
-
-    Returns a dict with "Contents" and "CommonPrefixes" lists.
-    """
-    contents: list[dict] = []
-    common_prefixes: list[dict] = []
-    kwargs: dict[str, Any] = {"Bucket": bucket, "Prefix": prefix}
-    if delimiter:
-        kwargs["Delimiter"] = delimiter
-
-    while True:
-        resp = client.list_objects_v2(**kwargs)
-        contents.extend(resp.get("Contents", []))
-        common_prefixes.extend(resp.get("CommonPrefixes", []))
-
-        if max_keys and len(contents) >= max_keys:
-            contents = contents[:max_keys]
-            break
-
-        if not resp.get("IsTruncated"):
-            break
-        kwargs["ContinuationToken"] = resp["NextContinuationToken"]
-
-    return {"Contents": contents, "CommonPrefixes": common_prefixes}
-
 
 # ---------------------------------------------------------------------------
 # Commands
@@ -80,10 +33,10 @@ def cmd_list(client: Any, args: argparse.Namespace) -> None:
     prefixes: list[dict] = []
 
     if args.recursive:
-        result = _paginate_objects(client, args.bucket, prefix, max_keys=args.limit)
+        result = paginate_objects(client, args.bucket, prefix, max_keys=args.limit)
         objects = result["Contents"]
     else:
-        result = _paginate_objects(client, args.bucket, prefix, delimiter="/", max_keys=args.limit)
+        result = paginate_objects(client, args.bucket, prefix, delimiter="/", max_keys=args.limit)
         objects = result["Contents"]
         prefixes = result["CommonPrefixes"]
 
@@ -100,7 +53,7 @@ def cmd_list(client: Any, args: argparse.Namespace) -> None:
                 "size_bytes": obj["Size"],
                 "last_modified": modified.isoformat() if isinstance(modified, datetime) else str(modified),
             })
-        _print_json(entries)
+        print_json(entries)
         return
 
     if not args.recursive and prefixes:
@@ -120,20 +73,20 @@ def cmd_list(client: Any, args: argparse.Namespace) -> None:
 
     for obj in objects:
         rel_key = obj["Key"][len(prefix):] if prefix else obj["Key"]
-        size = _human_size(obj["Size"])
+        size = human_size(obj["Size"])
         modified = obj["LastModified"]
         if isinstance(modified, datetime):
             modified = modified.strftime("%Y-%m-%d %H:%M")
         print(f"  {rel_key:<{max_key}}  {size:>10}  {modified}")
 
     total_size = sum(o["Size"] for o in objects)
-    print(f"\n  {len(objects)} object(s), {_human_size(total_size)} total")
+    print(f"\n  {len(objects)} object(s), {human_size(total_size)} total")
 
 
 def cmd_tree(client: Any, args: argparse.Namespace) -> None:
     """Display a tree view of the object hierarchy."""
     prefix = args.prefix or ""
-    result = _paginate_objects(client, args.bucket, prefix)
+    result = paginate_objects(client, args.bucket, prefix)
     objects = result["Contents"]
 
     if not objects:
@@ -175,7 +128,7 @@ def _render_tree(node: dict, indent: str, max_depth: int, current_depth: int) ->
                 extension = "    " if is_last else "│   "
                 _render_tree(child, indent + extension, max_depth, current_depth + 1)
         else:
-            print(f"{indent}{connector}{key} ({_human_size(child)})")
+            print(f"{indent}{connector}{key} ({human_size(child)})")
 
 
 def _count_descendants(node: dict) -> int:
@@ -191,7 +144,7 @@ def _count_descendants(node: dict) -> int:
 
 def cmd_download(client: Any, args: argparse.Namespace) -> None:
     """Download objects from S3 to a local directory."""
-    result = _paginate_objects(client, args.bucket, args.prefix)
+    result = paginate_objects(client, args.bucket, args.prefix)
     objects = result["Contents"]
 
     if args.pattern:
@@ -215,14 +168,14 @@ def cmd_download(client: Any, args: argparse.Namespace) -> None:
 
         size = obj["Size"]
         total_bytes += size
-        print(f"  Downloaded: {rel_path} ({_human_size(size)})")
+        print(f"  Downloaded: {rel_path} ({human_size(size)})")
 
-    print(f"\n  Downloaded {len(objects)} file(s), {_human_size(total_bytes)} total to {output_dir}/")
+    print(f"\n  Downloaded {len(objects)} file(s), {human_size(total_bytes)} total to {output_dir}/")
 
 
 def cmd_cleanup(client: Any, args: argparse.Namespace) -> None:
     """Delete old or matching artifacts from S3."""
-    result = _paginate_objects(client, args.bucket, args.prefix)
+    result = paginate_objects(client, args.bucket, args.prefix)
     objects = result["Contents"]
 
     if args.older_than is not None:
@@ -237,12 +190,12 @@ def cmd_cleanup(client: Any, args: argparse.Namespace) -> None:
         return
 
     total_size = sum(o["Size"] for o in objects)
-    print(f"  {len(objects)} object(s) matching criteria ({_human_size(total_size)} total)")
+    print(f"  {len(objects)} object(s) matching criteria ({human_size(total_size)} total)")
 
     if args.dry_run:
         print("\n  Dry run -- the following would be deleted:")
         for obj in objects:
-            print(f"    {obj['Key']} ({_human_size(obj['Size'])})")
+            print(f"    {obj['Key']} ({human_size(obj['Size'])})")
         return
 
     if not args.yes:
@@ -261,7 +214,7 @@ def cmd_cleanup(client: Any, args: argparse.Namespace) -> None:
         deleted += len(batch)
         print(f"  Deleted batch: {len(batch)} object(s) ({deleted}/{len(keys)} total)")
 
-    print(f"\n  Deleted {deleted} object(s), {_human_size(total_size)} freed.")
+    print(f"\n  Deleted {deleted} object(s), {human_size(total_size)} freed.")
 
 
 def cmd_upload(client: Any, args: argparse.Namespace) -> None:
@@ -283,7 +236,7 @@ def cmd_upload(client: Any, args: argparse.Namespace) -> None:
         total_bytes = _upload_file(client, local_path, args.bucket, args.prefix)
         count = 1
 
-    print(f"\n  Uploaded {count} file(s), {_human_size(total_bytes)} total to s3://{args.bucket}/{args.prefix}")
+    print(f"\n  Uploaded {count} file(s), {human_size(total_bytes)} total to s3://{args.bucket}/{args.prefix}")
 
 
 def _ensure_bucket(client: Any, bucket: str) -> None:
@@ -314,7 +267,7 @@ def _upload_file(client: Any, local_path: str, bucket: str, prefix: str) -> int:
 
     client.upload_file(local_path, bucket, key, ExtraArgs={"ContentType": content_type})
     size = os.path.getsize(local_path)
-    print(f"  Uploaded: {key} ({_human_size(size)})")
+    print(f"  Uploaded: {key} ({human_size(size)})")
     return size
 
 
@@ -335,7 +288,7 @@ def _upload_directory(client: Any, directory: str, bucket: str, prefix: str) -> 
             size = os.path.getsize(filepath)
             total_bytes += size
             count += 1
-            print(f"  Uploaded: {key} ({_human_size(size)})")
+            print(f"  Uploaded: {key} ({human_size(size)})")
 
     return count, total_bytes
 

@@ -13,25 +13,16 @@ from __future__ import annotations
 
 import argparse
 import base64
-import json
 import os
 import re
 import sys
 from datetime import UTC, datetime
 from typing import Any
 
+from autox_tools._output import print_json
 from autox_tools.secrets._client import connect
 
 _KEY_PATTERN = re.compile(r"^[a-zA-Z0-9._-]+$")
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _print_json(data: object) -> None:
-    print(json.dumps(data, indent=2, default=str))
 
 
 def _resolve_namespace(args: argparse.Namespace) -> str:
@@ -197,7 +188,7 @@ def cmd_list(api: Any, args: argparse.Namespace, namespace: str) -> None:
                 "created": str(s.metadata.creation_timestamp),
                 "labels": labels,
             })
-        _print_json({"namespace": namespace, "total": len(rows), "secrets": rows})
+        print_json({"namespace": namespace, "total": len(rows), "secrets": rows})
         return
 
     if not secrets:
@@ -237,7 +228,7 @@ def cmd_reveal(api: Any, args: argparse.Namespace, namespace: str) -> None:
     labels = dict(secret.metadata.labels) if secret.metadata.labels else {}
 
     if args.json:
-        _print_json({
+        print_json({
             "name": args.name,
             "namespace": namespace,
             "created": str(secret.metadata.creation_timestamp),
@@ -306,7 +297,7 @@ def cmd_create(api: Any, args: argparse.Namespace, namespace: str) -> None:
         _exit_k8s_error(exc, namespace, "create")
 
     if args.json:
-        _print_json({"name": args.name, "namespace": namespace, "keys": sorted(pairs.keys()), "created": True})
+        print_json({"name": args.name, "namespace": namespace, "keys": sorted(pairs.keys()), "created": True})
         return
 
     print(f"Secret '{args.name}' created in '{namespace}' with {len(pairs)} key(s).")
@@ -378,7 +369,7 @@ def cmd_edit(api: Any, args: argparse.Namespace, namespace: str) -> None:
     final_keys = sorted(existing_data.keys())
 
     if args.json:
-        _print_json({
+        print_json({
             "name": args.name,
             "namespace": namespace,
             "added": sorted(added),
@@ -422,7 +413,7 @@ def cmd_delete(api: Any, args: argparse.Namespace, namespace: str) -> None:
         _exit_k8s_error(exc, namespace, "delete")
 
     if args.json:
-        _print_json({"name": args.name, "namespace": namespace, "deleted": True})
+        print_json({"name": args.name, "namespace": namespace, "deleted": True})
         return
 
     print(f"Secret '{args.name}' deleted from '{namespace}'.")

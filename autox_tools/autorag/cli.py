@@ -12,11 +12,13 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from typing import Any
 
+from autox_tools._output import human_size, print_json
+from autox_tools._output import human_size as format_size
+from autox_tools._s3_utils import download_objects, paginate_objects
 from autox_tools.autorag._artifacts import (
     _CATEGORY_LABELS,
     ArtifactCategory,
@@ -34,7 +36,6 @@ from autox_tools.autorag._display import (
     format_pattern_settings,
     format_pipeline_params,
     format_run_header,
-    format_size,
     format_summary_metrics,
     is_lower_better,
     short_id,
@@ -47,14 +48,6 @@ from autox_tools.autorag._patterns import (
     parse_names,
 )
 from autox_tools.autorag._resolver import resolve
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _print_json(data: object) -> None:
-    print(json.dumps(data, indent=2, default=str))
 
 
 def _get_display_name(
@@ -106,7 +99,7 @@ def cmd_results(kfp_client: Any, s3_client: Any, args: argparse.Namespace) -> No
         )
 
     if args.json:
-        _print_json(_run_data_to_dict(data))
+        print_json(_run_data_to_dict(data))
         return
 
     pdf_path = getattr(args, "pdf", None)
@@ -203,7 +196,7 @@ def cmd_compare(kfp_client: Any, s3_client: Any, args: argparse.Namespace) -> No
         sys.exit("\n".join(errors))
 
     if args.json:
-        _print_json(_compare_data_to_dict(data1, data2, args.metrics))
+        print_json(_compare_data_to_dict(data1, data2, args.metrics))
         return
 
     pdf_path = getattr(args, "pdf", None)
@@ -382,7 +375,7 @@ def cmd_info(kfp_client: Any, s3_client: Any, args: argparse.Namespace) -> None:
         artifacts = list_and_categorize(s3_client, location.bucket, location.prefix)
 
     if args.json:
-        _print_json({
+        print_json({
             "run_id": args.run_id,
             "name": display_name,
             "state": state,
@@ -442,33 +435,7 @@ def _match_pattern_name(query: str, patterns: list[str]) -> list[str]:
     return [p for p in patterns if q in p.lower()]
 
 
-def _download_objects(
-    s3_client: Any,
-    bucket: str,
-    objects: list[dict[str, Any]],
-    base_prefix: str,
-    download_dir: str,
-) -> None:
-    """Download S3 objects to a local directory, preserving relative paths."""
-    from autox_tools.s3.cli import _human_size
-
-    os.makedirs(download_dir, exist_ok=True)
-    downloaded = 0
-    total_bytes = 0
-
-    for obj in objects:
-        key = obj["Key"]
-        if key.endswith("/"):
-            continue
-        rel = key[len(base_prefix):].lstrip("/") if base_prefix else key
-        local_path = os.path.join(download_dir, rel)
-        os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
-        s3_client.download_file(bucket, key, local_path)
-        downloaded += 1
-        total_bytes += obj.get("Size", 0)
-        print(f"  Downloaded: {rel} ({_human_size(obj.get('Size', 0))})")
-
-    print(f"\n  {downloaded} file(s), {_human_size(total_bytes)} total to {download_dir}/")
+download_objects = download_objects
 
 
 def _cmd_artifacts_pattern(
@@ -478,8 +445,6 @@ def _cmd_artifacts_pattern(
     args: argparse.Namespace,
 ) -> None:
     """Handle ``--pattern`` mode: list or download RAG pattern artifacts."""
-    from autox_tools.s3.cli import _human_size, _paginate_objects
-
     rag_prefix = find_rag_patterns_prefix(s3_client, bucket, key_prefix)
     if not rag_prefix:
         print("No rag_patterns/ folder found under this run's artifacts.")
@@ -512,7 +477,7 @@ def _cmd_artifacts_pattern(
 
     pattern_name = matched[0]
     pattern_prefix = f"{rag_prefix}{pattern_name}/"
-    result = _paginate_objects(s3_client, bucket, pattern_prefix)
+    result = paginate_objects(s3_client, bucket, pattern_prefix)
     objects = result.get("Contents", [])
 
     if args.artifact:
@@ -523,7 +488,7 @@ def _cmd_artifacts_pattern(
         return
 
     if args.json:
-        _print_json({
+        print_json({
             "pattern": pattern_name,
             "prefix": pattern_prefix,
             "total": len(objects),
@@ -539,12 +504,12 @@ def _cmd_artifacts_pattern(
         rel = obj["Key"][len(pattern_prefix):]
         if not rel:
             continue
-        print(f"  {rel:<60} {_human_size(obj.get('Size', 0)):>10}")
+        print(f"  {rel:<60} {human_size(obj.get('Size', 0)):>10}")
     print(f"\n  {len(objects)} artifact(s)")
 
     if args.download:
         print()
-        _download_objects(s3_client, bucket, objects, pattern_prefix, args.download)
+        download_objects(s3_client, bucket, objects, pattern_prefix, args.download)
 
 
 def _cmd_artifacts_pattern_all(
@@ -555,14 +520,12 @@ def _cmd_artifacts_pattern_all(
     args: argparse.Namespace,
 ) -> None:
     """List all RAG patterns with file counts and sizes."""
-    from autox_tools.s3.cli import _human_size, _paginate_objects
-
     summaries: list[dict[str, Any]] = []
     all_objects: list[dict[str, Any]] = []
 
     for pname in patterns:
         prefix = f"{rag_prefix}{pname}/"
-        result = _paginate_objects(s3_client, bucket, prefix)
+        result = paginate_objects(s3_client, bucket, prefix)
         objs = result.get("Contents", [])
         total_size = sum(o.get("Size", 0) for o in objs)
         summaries.append({
@@ -573,7 +536,7 @@ def _cmd_artifacts_pattern_all(
         all_objects.extend(objs)
 
     if args.json:
-        _print_json({"patterns": summaries, "total_patterns": len(summaries)})
+        print_json({"patterns": summaries, "total_patterns": len(summaries)})
         return
 
     max_name = max(len(s["name"]) for s in summaries) if summaries else 10
@@ -582,16 +545,16 @@ def _cmd_artifacts_pattern_all(
         print(
             f"  {s['name']:<{max_name}}  "
             f"{s['file_count']:>5} file(s)  "
-            f"{_human_size(s['total_size']):>10}"
+            f"{human_size(s['total_size']):>10}"
         )
 
     total_files = sum(s["file_count"] for s in summaries)
     total_bytes = sum(s["total_size"] for s in summaries)
-    print(f"\n  Total: {len(summaries)} pattern(s), {total_files} file(s), {_human_size(total_bytes)}")
+    print(f"\n  Total: {len(summaries)} pattern(s), {total_files} file(s), {human_size(total_bytes)}")
 
     if args.download:
         print()
-        _download_objects(s3_client, bucket, all_objects, rag_prefix, args.download)
+        download_objects(s3_client, bucket, all_objects, rag_prefix, args.download)
 
 
 def _cmd_artifacts_single_file(
@@ -634,7 +597,7 @@ def _cmd_artifacts_single_file(
     filename = os.path.basename(key)
 
     if args.json:
-        _print_json({
+        print_json({
             "pattern": pattern_name,
             "artifact": filename,
             "key": key,
@@ -660,8 +623,6 @@ def _cmd_artifacts_summary(
     args: argparse.Namespace,
 ) -> None:
     """Default mode: show a summary of artifacts with category counts."""
-    from autox_tools.s3.cli import _human_size
-
     artifacts = list_and_categorize(s3_client, bucket, key_prefix)
 
     cat_counts: dict[ArtifactCategory, int] = {}
@@ -678,7 +639,7 @@ def _cmd_artifacts_summary(
     total_size = sum(cat_sizes.values())
 
     if args.json:
-        _print_json({
+        print_json({
             "run_id": args.run_id,
             "bucket": bucket,
             "prefix": key_prefix,
@@ -700,9 +661,9 @@ def _cmd_artifacts_summary(
         if not count:
             continue
         label = _CATEGORY_LABELS[cat]
-        print(f"  {label:<25} {count:>6} file(s)  {_human_size(cat_sizes[cat]):>10}")
+        print(f"  {label:<25} {count:>6} file(s)  {human_size(cat_sizes[cat]):>10}")
 
-    print(f"\n  Total: {len(artifacts)} artifact(s), {_human_size(total_size)}")
+    print(f"\n  Total: {len(artifacts)} artifact(s), {human_size(total_size)}")
 
     if patterns:
         print(f"\n  RAG Patterns ({len(patterns)}):")
@@ -715,7 +676,7 @@ def _cmd_artifacts_summary(
         if len(objects) > 1000:
             print(f"\n  Downloading {len(objects)} objects...")
         print()
-        _download_objects(s3_client, bucket, objects, key_prefix, args.download)
+        download_objects(s3_client, bucket, objects, key_prefix, args.download)
 
 
 def cmd_artifacts(kfp_client: Any, s3_client: Any, args: argparse.Namespace) -> None:

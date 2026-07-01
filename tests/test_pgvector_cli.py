@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from autox_tools._output import human_size
 from autox_tools.vs.pgvector import cli
 
 # ---------------------------------------------------------------------------
@@ -128,10 +129,10 @@ class TestHelpers:
         assert cli._match_tables(tables, "embed_.*") == ["embed_a", "embed_b"]
 
     def test_human_size(self):
-        assert cli._human_size(0) == "0 B"
-        assert cli._human_size(1024) == "1.0 KB"
-        assert cli._human_size(1_048_576) == "1.0 MB"
-        assert cli._human_size(None) == "---"
+        assert human_size(0) == "0 B"
+        assert human_size(1024) == "1.0 KB"
+        assert human_size(1_048_576) == "1.0 MB"
+        assert human_size(None) == "—"
 
 
 # ---------------------------------------------------------------------------
