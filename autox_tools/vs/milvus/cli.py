@@ -43,6 +43,17 @@ def _match_collections(collections: list[str], pattern: str) -> list[str]:
     return sorted(c for c in collections if regex.fullmatch(c) or c.startswith(pattern))
 
 
+def _row_count(client: MilvusClient, name: str) -> int:
+    """Return the exact row count including unflushed data.
+
+    ``get_collection_stats`` only counts sealed (flushed) segments, so
+    recently inserted rows appear as 0.  ``query(count(*))`` counts all
+    rows regardless of segment state.
+    """
+    result = client.query(collection_name=name, filter="", output_fields=["count(*)"])
+    return result[0]["count(*)"] if result else 0
+
+
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -56,8 +67,7 @@ def cmd_list(client: MilvusClient, args: argparse.Namespace) -> None:
         for name in collections:
             entry: dict[str, object] = {"name": name}
             if args.counts:
-                stats = client.get_collection_stats(name)
-                entry["row_count"] = int(stats.get("row_count", 0))
+                entry["row_count"] = _row_count(client, name)
             rows.append(entry)
         print_json({"total": len(collections), "collections": rows})
         return
@@ -66,8 +76,7 @@ def cmd_list(client: MilvusClient, args: argparse.Namespace) -> None:
     for name in collections:
         suffix = ""
         if args.counts:
-            stats = client.get_collection_stats(name)
-            suffix = f"  ({stats.get('row_count', '?')} rows)"
+            suffix = f"  ({_row_count(client, name):,} rows)"
         print(f"  - {name}{suffix}")
 
 
@@ -78,7 +87,7 @@ def cmd_describe(client: MilvusClient, args: argparse.Namespace) -> None:
         sys.exit(f"Collection '{name}' does not exist.")
 
     info = client.describe_collection(name)
-    stats = client.get_collection_stats(name)
+    row_count = _row_count(client, name)
     indexes = client.list_indexes(name)
     partitions = client.list_partitions(name)
 
@@ -91,7 +100,7 @@ def cmd_describe(client: MilvusClient, args: argparse.Namespace) -> None:
             "description": info.get("description", ""),
             "auto_id": info.get("auto_id"),
             "num_shards": info.get("num_shards"),
-            "row_count": int(stats.get("row_count", 0)),
+            "row_count": row_count,
             "fields": info.get("fields", []),
             "indexes": idx_details,
             "partitions": partitions,
@@ -102,7 +111,7 @@ def cmd_describe(client: MilvusClient, args: argparse.Namespace) -> None:
     print(f"Description: {info.get('description', '') or '(none)'}")
     print(f"Auto ID    : {info.get('auto_id')}")
     print(f"Num shards : {info.get('num_shards')}")
-    print(f"Row count  : {stats.get('row_count', 'N/A')}")
+    print(f"Row count  : {row_count:,}")
     print()
 
     fields = info.get("fields", [])
@@ -171,8 +180,7 @@ def cmd_count(client: MilvusClient, args: argparse.Namespace) -> None:
     rows: list[dict[str, object]] = []
     total_rows = 0
     for name in collections:
-        stats = client.get_collection_stats(name)
-        count = int(stats.get("row_count", 0))
+        count = _row_count(client, name)
         total_rows += count
         rows.append({"name": name, "row_count": count})
 
@@ -298,8 +306,7 @@ def cmd_health(client: MilvusClient, args: argparse.Namespace) -> None:
     collections = client.list_collections()
     total_rows = 0
     for c in collections:
-        stats = client.get_collection_stats(c)
-        total_rows += int(stats.get("row_count", 0))
+        total_rows += _row_count(client, c)
 
     if args.json:
         print_json({
