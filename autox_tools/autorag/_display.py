@@ -245,7 +245,7 @@ def format_pattern_detail(pattern: PatternMetrics) -> str:
 
 _PATTERN_NOISE_KEYS = frozenset({
     "name", "iteration", "max_combinations", "duration_seconds",
-    "final_score", "scores", "metrics",
+    "final_score", "scores", "metrics", "evaluation", "inference",
 })
 
 _SETTING_SKIP_KEYS = frozenset({
@@ -350,17 +350,35 @@ def format_pipeline_params(params: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _build_ci_lookup(pattern: PatternMetrics) -> dict[str, dict]:
+    """Build a lookup of CI bounds from available score structures."""
+    scores_raw = pattern.raw_data.get("scores")
+    if isinstance(scores_raw, dict):
+        return scores_raw
+
+    evaluation = pattern.raw_data.get("evaluation")
+    if isinstance(evaluation, dict):
+        metrics_list = evaluation.get("metrics")
+        if isinstance(metrics_list, list):
+            return {
+                entry["name"]: entry.get("scores", {})
+                for entry in metrics_list
+                if isinstance(entry, dict) and "name" in entry
+            }
+    return {}
+
+
 def _format_scores_with_ci(pattern: PatternMetrics) -> list[str]:
     """Format pattern scores with confidence intervals when available."""
-    scores_raw = pattern.raw_data.get("scores")
-    if not isinstance(scores_raw, dict):
+    ci_lookup = _build_ci_lookup(pattern)
+    if not ci_lookup:
         return _format_flat_dict(pattern.metrics)
 
     lines: list[str] = []
     max_name = max(len(k) for k in pattern.metrics) if pattern.metrics else 0
     for name in sorted(pattern.metrics):
         mean = pattern.metrics[name]
-        score_data = scores_raw.get(name, {})
+        score_data = ci_lookup.get(name, {})
         ci_low = score_data.get("ci_low") if isinstance(score_data, dict) else None
         ci_high = score_data.get("ci_high") if isinstance(score_data, dict) else None
         val_str = f"{mean:.4f}"

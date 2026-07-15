@@ -92,17 +92,56 @@ def list_and_categorize(
     return artifacts
 
 
+def _extract_from_metrics_list(entries: list[dict]) -> dict[str, float] | None:
+    """Average per-metric scores from a list of ``{name, score}`` dicts.
+
+    Returns ``None`` if the list doesn't match the expected shape.
+    """
+    if not entries or not isinstance(entries[0], dict) or "name" not in entries[0]:
+        return None
+    totals: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for entry in entries:
+        name = entry.get("name")
+        score = entry.get("score")
+        if name and isinstance(score, (int, float)):
+            totals[name] = totals.get(name, 0.0) + score
+            counts[name] = counts.get(name, 0) + 1
+    if not totals:
+        return None
+    return {name: totals[name] / counts[name] for name in totals}
+
+
 def extract_metrics(data: dict | list) -> dict[str, float]:
     """Extract numeric metrics from evaluation results.
 
-    Handles flat dicts (``{"accuracy": 0.9, ...}``), nested dicts
-    (``{"metrics": {"accuracy": 0.9, ...}}``), and lists of per-pattern
-    result dicts (averages numeric fields across entries).
+    Handles (in order):
+    1. List of per-question dicts with a ``metrics`` list of
+       ``{name, score}`` entries — averages scores across questions.
+    2. List of flat dicts — averages numeric fields across entries.
+    3. Dict with ``evaluation.metrics`` list — extracts ``mean`` values.
+    4. Dict with ``scores`` dict — extracts ``mean`` values.
+    5. Dict with ``metrics`` sub-dict — extracts numeric values.
+    6. Flat dict — extracts numeric values.
     """
     if isinstance(data, list):
         dicts = [e for e in data if isinstance(e, dict)]
         if not dicts:
             return {}
+
+        has_metrics_list = any(
+            isinstance(e.get("metrics"), list) for e in dicts
+        )
+        if has_metrics_list:
+            all_metric_entries: list[dict] = []
+            for entry in dicts:
+                m = entry.get("metrics")
+                if isinstance(m, list):
+                    all_metric_entries.extend(m)
+            result = _extract_from_metrics_list(all_metric_entries)
+            if result:
+                return result
+
         numeric_keys: set[str] = set()
         for entry in dicts:
             numeric_keys.update(
@@ -118,9 +157,26 @@ def extract_metrics(data: dict | list) -> dict[str, float]:
                 aggregated[key] = sum(values) / len(values)
         return aggregated
 
+    evaluation = data.get("evaluation")
+    if isinstance(evaluation, dict):
+        metrics_list = evaluation.get("metrics")
+        if isinstance(metrics_list, list):
+            result: dict[str, float] = {}
+            for entry in metrics_list:
+                if not isinstance(entry, dict):
+                    continue
+                name = entry.get("name")
+                scores = entry.get("scores")
+                if name and isinstance(scores, dict):
+                    mean = scores.get("mean")
+                    if isinstance(mean, (int, float)):
+                        result[name] = float(mean)
+            if result:
+                return result
+
     scores = data.get("scores")
     if isinstance(scores, dict):
-        result: dict[str, float] = {}
+        result = {}
         for name, score_data in scores.items():
             if isinstance(score_data, dict) and "mean" in score_data:
                 mean = score_data["mean"]

@@ -127,23 +127,69 @@ def _download_json(s3_client: Any, bucket: str, key: str) -> dict | list | None:
         return None
 
 
-def _extract_pattern_scores(data: dict) -> dict[str, float]:
-    """Extract metric scores from a pattern's ``scores`` structure.
+def _extract_evaluation_metrics(data: dict) -> dict[str, float]:
+    """Extract scores from the ``evaluation.metrics`` list structure.
 
-    Each entry under ``scores`` has ``mean``, ``ci_low``, ``ci_high``.
-    Falls back to generic ``extract_metrics`` when no ``scores`` dict exists.
+    Returns an empty dict when the structure is absent or unparseable,
+    letting callers fall through to legacy formats.
     """
+    evaluation = data.get("evaluation")
+    if not isinstance(evaluation, dict):
+        return {}
+    metrics_list = evaluation.get("metrics")
+    if not isinstance(metrics_list, list):
+        return {}
+    result: dict[str, float] = {}
+    for entry in metrics_list:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        scores = entry.get("scores")
+        if not name or not isinstance(scores, dict):
+            continue
+        mean = scores.get("mean")
+        if isinstance(mean, (int, float)):
+            result[name] = float(mean)
+    return result
+
+
+def _extract_pattern_scores(data: dict) -> dict[str, float]:
+    """Extract metric scores from a pattern's score structures.
+
+    Tries (in order): ``evaluation.metrics`` list, ``scores`` dict,
+    then falls back to generic ``extract_metrics``.
+    """
+    result = _extract_evaluation_metrics(data)
+    if result:
+        return result
+
     scores = data.get("scores")
     if isinstance(scores, dict):
-        result: dict[str, float] = {}
+        extracted: dict[str, float] = {}
         for name, score_data in scores.items():
             if isinstance(score_data, dict) and "mean" in score_data:
                 mean = score_data["mean"]
                 if isinstance(mean, (int, float)):
-                    result[name] = float(mean)
-        if result:
-            return result
+                    extracted[name] = float(mean)
+        if extracted:
+            return extracted
     return extract_metrics(data)
+
+
+def _detect_optimization_metric(data: dict) -> str | None:
+    """Find the metric flagged with ``optimization_metric: true``."""
+    evaluation = data.get("evaluation")
+    if not isinstance(evaluation, dict):
+        return None
+    metrics_list = evaluation.get("metrics")
+    if not isinstance(metrics_list, list):
+        return None
+    for entry in metrics_list:
+        if isinstance(entry, dict) and entry.get("optimization_metric"):
+            name = entry.get("name")
+            if name:
+                return name
+    return None
 
 
 def _detect_final_score_metric(
@@ -237,6 +283,10 @@ def detect_primary_metric(
             return explicit
 
     if patterns:
+        for p in patterns:
+            detected = _detect_optimization_metric(p.raw_data)
+            if detected and detected in pool:
+                return detected
         for p in patterns:
             detected = _detect_final_score_metric(p.raw_data, p.metrics)
             if detected:

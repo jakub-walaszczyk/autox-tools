@@ -2084,3 +2084,290 @@ class TestCmdInfo:
 
         with pytest.raises(SystemExit, match="Failed to get run"):
             cli.cmd_info(kfp, s3, _info_ns())
+
+
+# ---------------------------------------------------------------------------
+# New evaluation.metrics list format tests
+# ---------------------------------------------------------------------------
+
+_NEW_FORMAT_PATTERN_DATA = {
+    "name": "Pattern1",
+    "max_combinations": 45,
+    "evaluation": {
+        "metrics": [
+            {
+                "name": "answer_correctness",
+                "evaluator": "unitxt",
+                "scores": {"mean": 0.9089, "ci_low": 0.8299, "ci_high": 0.9464},
+            },
+            {
+                "name": "faithfulness",
+                "evaluator": "unitxt",
+                "scores": {"mean": 0.3889, "ci_low": 0.3582, "ci_high": 0.4347},
+            },
+            {
+                "name": "context_correctness",
+                "evaluator": "unitxt",
+                "scores": {"mean": 1.0, "ci_low": None, "ci_high": None},
+            },
+            {
+                "name": "answer_relevance",
+                "evaluator": "judge",
+                "scores": {"mean": 1.0, "ci_low": 1.0, "ci_high": 1.0},
+                "model_id": "vllm-inference-gpu-qwen/redhataiqwen3-8b-fp8-dynamic",
+            },
+            {
+                "name": "overall_score",
+                "evaluator": "custom",
+                "scores": {"mean": 0.8245, "ci_low": 0.7294, "ci_high": 0.7937},
+                "optimization_metric": True,
+            },
+        ],
+    },
+    "duration_seconds": 28,
+    "settings": {
+        "chunking": {"method": "recursive", "chunk_size": 512},
+        "embedding": {"model_id": "vllm-embedding/bge-m3"},
+        "retrieval": {"method": "simple", "number_of_chunks": 5},
+        "generation": {"model_id": "vllm-inference-gpu-qwen/redhataiqwen3-8b-fp8-dynamic"},
+    },
+    "iteration": 0,
+    "inference": {"responses_template": {"model": "qwen"}},
+}
+
+
+class TestExtractPatternScoresNewFormat:
+    def test_extracts_from_evaluation_metrics_list(self):
+        result = _patterns._extract_pattern_scores(_NEW_FORMAT_PATTERN_DATA)
+        assert result == {
+            "answer_correctness": 0.9089,
+            "faithfulness": 0.3889,
+            "context_correctness": 1.0,
+            "answer_relevance": 1.0,
+            "overall_score": 0.8245,
+        }
+
+    def test_excludes_noise_keys(self):
+        result = _patterns._extract_pattern_scores(_NEW_FORMAT_PATTERN_DATA)
+        assert "duration_seconds" not in result
+        assert "max_combinations" not in result
+        assert "iteration" not in result
+
+    def test_prefers_evaluation_over_scores(self):
+        data = {
+            "evaluation": {
+                "metrics": [
+                    {"name": "accuracy", "scores": {"mean": 0.95, "ci_low": 0.9, "ci_high": 0.99}},
+                ],
+            },
+            "scores": {
+                "accuracy": {"mean": 0.80, "ci_low": 0.7, "ci_high": 0.9},
+            },
+        }
+        result = _patterns._extract_pattern_scores(data)
+        assert result["accuracy"] == 0.95
+
+    def test_falls_back_to_scores_dict(self):
+        data = {
+            "scores": {
+                "accuracy": {"mean": 0.80, "ci_low": 0.7, "ci_high": 0.9},
+            },
+        }
+        result = _patterns._extract_pattern_scores(data)
+        assert result == {"accuracy": 0.80}
+
+    def test_skips_entries_without_mean(self):
+        data = {
+            "evaluation": {
+                "metrics": [
+                    {"name": "good", "scores": {"mean": 0.9}},
+                    {"name": "bad", "scores": {"mean": None}},
+                    {"name": "missing", "scores": {}},
+                    {"name": "no_scores"},
+                ],
+            },
+        }
+        result = _patterns._extract_pattern_scores(data)
+        assert result == {"good": 0.9}
+
+
+class TestExtractMetricsNewFormat:
+    def test_per_question_metrics_list(self):
+        data = [
+            {
+                "question": "Q1",
+                "metrics": [
+                    {"name": "answer_correctness", "evaluator": "unitxt", "score": 0.9},
+                    {"name": "faithfulness", "evaluator": "unitxt", "score": 0.4},
+                ],
+            },
+            {
+                "question": "Q2",
+                "metrics": [
+                    {"name": "answer_correctness", "evaluator": "unitxt", "score": 0.8},
+                    {"name": "faithfulness", "evaluator": "unitxt", "score": 0.6},
+                ],
+            },
+        ]
+        result = _artifacts.extract_metrics(data)
+        assert result["answer_correctness"] == pytest.approx(0.85)
+        assert result["faithfulness"] == pytest.approx(0.50)
+
+    def test_per_question_with_missing_metrics(self):
+        data = [
+            {"question": "Q1", "metrics": [{"name": "acc", "score": 0.9}]},
+            {"question": "Q2"},
+        ]
+        result = _artifacts.extract_metrics(data)
+        assert result == {"acc": 0.9}
+
+    def test_falls_back_to_flat_numeric_for_old_format(self):
+        data = [
+            {"accuracy": 0.8, "f1_score": 0.7, "name": "p1"},
+            {"accuracy": 0.9, "f1_score": 0.8, "name": "p2"},
+        ]
+        result = _artifacts.extract_metrics(data)
+        assert result["accuracy"] == pytest.approx(0.85)
+
+    def test_dict_with_evaluation_metrics(self):
+        data = {
+            "evaluation": {
+                "metrics": [
+                    {"name": "accuracy", "scores": {"mean": 0.95}},
+                    {"name": "f1", "scores": {"mean": 0.88}},
+                ],
+            },
+        }
+        result = _artifacts.extract_metrics(data)
+        assert result == {"accuracy": 0.95, "f1": 0.88}
+
+
+class TestDetectPrimaryMetricNewFormat:
+    def test_detects_optimization_metric_flag(self):
+        patterns = [
+            _patterns.PatternMetrics(
+                "P1",
+                {"answer_correctness": 0.9, "overall_score": 0.82},
+                _NEW_FORMAT_PATTERN_DATA,
+            ),
+        ]
+        result = _patterns.detect_primary_metric({}, patterns)
+        assert result == "overall_score"
+
+    def test_optimization_metric_takes_precedence_over_well_known(self):
+        patterns = [
+            _patterns.PatternMetrics(
+                "P1",
+                {"answer_correctness": 0.9, "overall_score": 0.82},
+                _NEW_FORMAT_PATTERN_DATA,
+            ),
+        ]
+        result = _patterns.detect_primary_metric(
+            {"answer_correctness": 0.9, "overall_score": 0.82}, patterns,
+        )
+        assert result == "overall_score"
+
+    def test_pipeline_params_still_takes_top_precedence(self):
+        patterns = [
+            _patterns.PatternMetrics(
+                "P1",
+                {"answer_correctness": 0.9, "overall_score": 0.82},
+                _NEW_FORMAT_PATTERN_DATA,
+            ),
+        ]
+        result = _patterns.detect_primary_metric(
+            {"answer_correctness": 0.9, "overall_score": 0.82},
+            patterns,
+            pipeline_params={"optimization_metric": "answer_correctness"},
+        )
+        assert result == "answer_correctness"
+
+    def test_falls_back_to_final_score_for_old_format(self):
+        patterns = [
+            _patterns.PatternMetrics(
+                "P1",
+                {"answer_correctness": 0.92, "faithfulness": 0.88},
+                {"final_score": 0.88},
+            ),
+        ]
+        result = _patterns.detect_primary_metric({}, patterns)
+        assert result == "faithfulness"
+
+
+class TestFormatScoresWithCiNewFormat:
+    def test_shows_ci_from_evaluation_metrics(self):
+        p = _patterns.PatternMetrics(
+            "P1",
+            {"answer_correctness": 0.9089, "faithfulness": 0.3889},
+            _NEW_FORMAT_PATTERN_DATA,
+        )
+        lines = _display._format_scores_with_ci(p)
+        text = "\n".join(lines)
+        assert "0.9089" in text
+        assert "0.8299" in text
+        assert "0.9464" in text
+        assert "0.3889" in text
+        assert "0.3582" in text
+
+    def test_omits_ci_when_null(self):
+        p = _patterns.PatternMetrics(
+            "P1",
+            {"context_correctness": 1.0},
+            {
+                "evaluation": {
+                    "metrics": [
+                        {"name": "context_correctness", "scores": {"mean": 1.0, "ci_low": None, "ci_high": None}},
+                    ],
+                },
+            },
+        )
+        lines = _display._format_scores_with_ci(p)
+        text = "\n".join(lines)
+        assert "1.0000" in text
+        assert "[" not in text
+
+
+class TestNoiseKeysNewFormat:
+    def test_evaluation_excluded_from_settings(self):
+        p = _patterns.PatternMetrics(
+            "P1",
+            {"accuracy": 0.9},
+            _NEW_FORMAT_PATTERN_DATA,
+        )
+        result = _display.format_pattern_settings(p)
+        assert "evaluation" not in result.lower().split("chunking")[0]
+        assert "inference" not in result.lower().split("chunking")[0]
+        assert "Chunking:" in result
+        assert "recursive" in result
+
+    def test_filter_excludes_new_noise_metrics(self):
+        metrics = {"accuracy": 0.9, "max_combinations": 100, "iteration": 5}
+        assert _display.filter_metric_dict(metrics) == {"accuracy": 0.9}
+
+
+class TestCmdResultsNewFormat:
+    def test_new_format_end_to_end(self, capsys):
+        kfp = MagicMock()
+        s3 = MagicMock()
+        patterns = [
+            _patterns.PatternMetrics(
+                "Pattern1",
+                {"answer_correctness": 0.9089, "faithfulness": 0.3889, "overall_score": 0.8245},
+                _NEW_FORMAT_PATTERN_DATA,
+            ),
+        ]
+        data = _mock_collect(
+            summary={"answer_correctness": 0.9089, "faithfulness": 0.3889, "overall_score": 0.8245},
+            patterns=patterns,
+        )
+
+        with patch("autox_tools.autorag.cli.collect_run_data", return_value=data):
+            cli.cmd_results(kfp, s3, _results_ns())
+
+        out = capsys.readouterr().out
+        assert "answer_correctness" in out
+        assert "faithfulness" in out
+        assert "overall_score" in out
+        assert "Leaderboard" in out
+        assert "max_combinations" not in out
+        assert "iteration" not in out
