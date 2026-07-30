@@ -2,7 +2,7 @@
 
 Usage::
 
-    uv run secrets list [-n NAMESPACE] [--filter PATTERN] [--labels KEY=VAL,...] [--json]
+    uv run secrets list [-n NAMESPACE] [--type TYPE] [--filter PATTERN] [--labels KEY=VAL,...] [--json]
     uv run secrets reveal <name> [-n NAMESPACE] [--json]
     uv run secrets create <name> --from-literal KEY=VALUE [...] [--from-env-file FILE] [-y] [--json]
     uv run secrets edit <name> --set KEY=VALUE [...] --remove KEY [...] [-y] [--json]
@@ -103,6 +103,17 @@ def _parse_key_value(literal: str) -> tuple[str, str]:
     return key, value
 
 
+def _type_matches(actual: str, wanted: str) -> bool:
+    """Return True if a secret's *actual* type matches the *wanted* filter.
+
+    Matches case-insensitively against the full type (``kubernetes.io/tls``)
+    or its short segment after the last ``/`` (``tls``), so both forms work.
+    """
+    actual_l = actual.lower()
+    wanted_l = wanted.lower()
+    return actual_l == wanted_l or actual_l.rsplit("/", 1)[-1] == wanted_l
+
+
 def _parse_labels(labels_str: str) -> dict[str, str]:
     """Parse a comma-separated ``KEY=VALUE,...`` label string."""
     result: dict[str, str] = {}
@@ -160,7 +171,7 @@ def _confirm(prompt: str) -> bool:
 
 
 def cmd_list(api: Any, args: argparse.Namespace, namespace: str) -> None:
-    """List Opaque secrets in a namespace."""
+    """List secrets in a namespace, optionally filtered by type."""
     kwargs: dict[str, Any] = {"namespace": namespace, "_request_timeout": 30}
     if args.labels:
         kwargs["label_selector"] = args.labels
@@ -170,8 +181,10 @@ def cmd_list(api: Any, args: argparse.Namespace, namespace: str) -> None:
     except Exception as exc:
         _exit_k8s_error(exc, namespace, "list")
 
-    items = secret_list.items or []
-    secrets = [s for s in items if (s.type or "") == "Opaque"]
+    secrets = secret_list.items or []
+
+    if args.type:
+        secrets = [s for s in secrets if _type_matches(s.type or "Opaque", args.type)]
 
     if args.filter:
         pattern = args.filter.lower()
@@ -184,6 +197,7 @@ def cmd_list(api: Any, args: argparse.Namespace, namespace: str) -> None:
             labels = dict(s.metadata.labels) if s.metadata.labels else {}
             rows.append({
                 "name": s.metadata.name,
+                "type": s.type or "Opaque",
                 "keys": keys,
                 "created": str(s.metadata.creation_timestamp),
                 "labels": labels,
@@ -192,38 +206,39 @@ def cmd_list(api: Any, args: argparse.Namespace, namespace: str) -> None:
         return
 
     if not secrets:
-        print(f"No Opaque secrets found in namespace '{namespace}'.")
+        scope = f" of type '{args.type}'" if args.type else ""
+        print(f"No secrets{scope} found in namespace '{namespace}'.")
         return
 
-    entries: list[tuple[str, str, str]] = []
+    entries: list[tuple[str, str, str, str]] = []
     for s in secrets:
         name = s.metadata.name or ""
+        secret_type = s.type or "Opaque"
         key_count = str(len(s.data)) if s.data else "0"
         age = _format_age(s.metadata.creation_timestamp)
-        entries.append((name, key_count, age))
+        entries.append((name, secret_type, key_count, age))
 
     col_name = max(len("Name"), max(len(e[0]) for e in entries))
-    col_keys = max(len("Keys"), max(len(e[1]) for e in entries))
-    col_age = max(len("Age"), max(len(e[2]) for e in entries))
+    col_type = max(len("Type"), max(len(e[1]) for e in entries))
+    col_keys = max(len("Keys"), max(len(e[2]) for e in entries))
+    col_age = max(len("Age"), max(len(e[3]) for e in entries))
 
-    print(f"  {'Name':<{col_name}}  {'Keys':>{col_keys}}  {'Age':>{col_age}}")
-    print(f"  {'─' * col_name}  {'─' * col_keys}  {'─' * col_age}")
-    for name, key_count, age in entries:
-        print(f"  {name:<{col_name}}  {key_count:>{col_keys}}  {age:>{col_age}}")
+    print(f"  {'Name':<{col_name}}  {'Type':<{col_type}}  {'Keys':>{col_keys}}  {'Age':>{col_age}}")
+    print(f"  {'─' * col_name}  {'─' * col_type}  {'─' * col_keys}  {'─' * col_age}")
+    for name, secret_type, key_count, age in entries:
+        print(f"  {name:<{col_name}}  {secret_type:<{col_type}}  {key_count:>{col_keys}}  {age:>{col_age}}")
 
     print(f"\n  {len(entries)} secret(s) in '{namespace}'")
 
 
 def cmd_reveal(api: Any, args: argparse.Namespace, namespace: str) -> None:
-    """Decode and display a secret's data."""
+    """Decode and display a secret's data, regardless of its type."""
     try:
         secret = api.read_namespaced_secret(name=args.name, namespace=namespace, _request_timeout=30)
     except Exception as exc:
         _exit_k8s_error(exc, namespace, "read")
 
-    if (secret.type or "") != "Opaque":
-        sys.exit(f"Secret '{args.name}' is of type '{secret.type}', not Opaque.")
-
+    secret_type = secret.type or "Opaque"
     decoded = _decode_secret_data(secret.data)
     labels = dict(secret.metadata.labels) if secret.metadata.labels else {}
 
@@ -231,6 +246,7 @@ def cmd_reveal(api: Any, args: argparse.Namespace, namespace: str) -> None:
         print_json({
             "name": args.name,
             "namespace": namespace,
+            "type": secret_type,
             "created": str(secret.metadata.creation_timestamp),
             "labels": labels,
             "data": decoded,
@@ -239,6 +255,7 @@ def cmd_reveal(api: Any, args: argparse.Namespace, namespace: str) -> None:
 
     print(f"Secret    : {args.name}")
     print(f"Namespace : {namespace}")
+    print(f"Type      : {secret_type}")
     print(f"Created   : {secret.metadata.creation_timestamp}")
     if labels:
         label_str = ", ".join(f"{k}={v}" for k, v in sorted(labels.items()))
@@ -435,7 +452,11 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     # list
-    p = sub.add_parser("list", help="List Opaque secrets in a namespace")
+    p = sub.add_parser("list", help="List secrets in a namespace (all types)")
+    p.add_argument(
+        "--type",
+        help="Filter by secret type; accepts full type ('kubernetes.io/tls') or short form ('tls', 'Opaque')",
+    )
     p.add_argument("--filter", help="Substring filter on secret names (case-insensitive)")
     p.add_argument("--labels", help="Kubernetes label selector (e.g. 'app=myapp,env=prod')")
 

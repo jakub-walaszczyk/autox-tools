@@ -64,6 +64,7 @@ def _ns_args(**overrides: object) -> argparse.Namespace:
         "json": False,
         "namespace": "test-ns",
         "command": "list",
+        "type": None,
         "filter": None,
         "labels": None,
         "name": "test-secret",
@@ -235,7 +236,7 @@ class TestCmdList:
         assert "api-key" in out
         assert "2 secret(s)" in out
 
-    def test_filters_non_opaque(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_lists_all_types_by_default(self, capsys: pytest.CaptureFixture[str]) -> None:
         api = _mock_api()
         api.list_namespaced_secret.return_value = _make_secret_list(
             _make_secret("opaque-one", data={"k": "v"}),
@@ -245,9 +246,47 @@ class TestCmdList:
         cli.cmd_list(api, _ns_args(), "test-ns")
         out = capsys.readouterr().out
         assert "opaque-one" in out
+        assert "sa-token" in out
+        assert "tls-cert" in out
+        # Type column surfaces each secret's type.
+        assert "kubernetes.io/tls" in out
+        assert "kubernetes.io/service-account-token" in out
+        assert "3 secret(s)" in out
+
+    def test_type_filter_short_form(self, capsys: pytest.CaptureFixture[str]) -> None:
+        api = _mock_api()
+        api.list_namespaced_secret.return_value = _make_secret_list(
+            _make_secret("opaque-one", data={"k": "v"}),
+            _make_secret("sa-token", secret_type="kubernetes.io/service-account-token", data={"token": "x"}),
+            _make_secret("tls-cert", secret_type="kubernetes.io/tls", data={"tls.crt": "x"}),
+        )
+        cli.cmd_list(api, _ns_args(type="tls"), "test-ns")
+        out = capsys.readouterr().out
+        assert "tls-cert" in out
+        assert "opaque-one" not in out
         assert "sa-token" not in out
+        assert "1 secret(s)" in out
+
+    def test_type_filter_full_form(self, capsys: pytest.CaptureFixture[str]) -> None:
+        api = _mock_api()
+        api.list_namespaced_secret.return_value = _make_secret_list(
+            _make_secret("opaque-one", data={"k": "v"}),
+            _make_secret("tls-cert", secret_type="kubernetes.io/tls", data={"tls.crt": "x"}),
+        )
+        cli.cmd_list(api, _ns_args(type="Opaque"), "test-ns")
+        out = capsys.readouterr().out
+        assert "opaque-one" in out
         assert "tls-cert" not in out
         assert "1 secret(s)" in out
+
+    def test_type_filter_no_match(self, capsys: pytest.CaptureFixture[str]) -> None:
+        api = _mock_api()
+        api.list_namespaced_secret.return_value = _make_secret_list(
+            _make_secret("opaque-one", data={"k": "v"}),
+        )
+        cli.cmd_list(api, _ns_args(type="tls"), "test-ns")
+        out = capsys.readouterr().out
+        assert "No secrets of type 'tls' found" in out
 
     def test_name_filter(self, capsys: pytest.CaptureFixture[str]) -> None:
         api = _mock_api()
@@ -274,20 +313,23 @@ class TestCmdList:
         api.list_namespaced_secret.return_value = _make_secret_list()
         cli.cmd_list(api, _ns_args(), "test-ns")
         out = capsys.readouterr().out
-        assert "No Opaque secrets found" in out
+        assert "No secrets found" in out
 
     def test_json_output(self, capsys: pytest.CaptureFixture[str]) -> None:
         api = _mock_api()
         api.list_namespaced_secret.return_value = _make_secret_list(
             _make_secret("db-creds", data={"user": "admin"}, labels={"app": "db"}),
+            _make_secret("tls-cert", secret_type="kubernetes.io/tls", data={"tls.crt": "x"}),
         )
         cli.cmd_list(api, _ns_args(json=True), "test-ns")
         result = json.loads(capsys.readouterr().out)
         assert result["namespace"] == "test-ns"
-        assert result["total"] == 1
+        assert result["total"] == 2
         assert result["secrets"][0]["name"] == "db-creds"
+        assert result["secrets"][0]["type"] == "Opaque"
         assert result["secrets"][0]["keys"] == ["user"]
         assert result["secrets"][0]["labels"] == {"app": "db"}
+        assert result["secrets"][1]["type"] == "kubernetes.io/tls"
 
     def test_k8s_error_403(self) -> None:
         api = _mock_api()
@@ -313,13 +355,16 @@ class TestCmdReveal:
         assert "pg.svc" in out
         assert "s3cret" in out
 
-    def test_non_opaque_exits(self) -> None:
+    def test_reveals_non_opaque(self, capsys: pytest.CaptureFixture[str]) -> None:
         api = _mock_api()
         api.read_namespaced_secret.return_value = _make_secret(
-            "tls-cert", secret_type="kubernetes.io/tls", data={"tls.crt": "x"},
+            "tls-cert", secret_type="kubernetes.io/tls", data={"tls.crt": "PEMDATA"},
         )
-        with pytest.raises(SystemExit, match="not Opaque"):
-            cli.cmd_reveal(api, _ns_args(name="tls-cert"), "test-ns")
+        cli.cmd_reveal(api, _ns_args(name="tls-cert"), "test-ns")
+        out = capsys.readouterr().out
+        assert "tls-cert" in out
+        assert "kubernetes.io/tls" in out
+        assert "PEMDATA" in out
 
     def test_not_found_exits(self) -> None:
         api = _mock_api()
@@ -342,6 +387,7 @@ class TestCmdReveal:
         cli.cmd_reveal(api, _ns_args(name="db-creds", json=True), "test-ns")
         result = json.loads(capsys.readouterr().out)
         assert result["name"] == "db-creds"
+        assert result["type"] == "Opaque"
         assert result["data"]["user"] == "admin"
         assert result["labels"] == {"env": "prod"}
 
@@ -673,9 +719,15 @@ class TestParser:
     def test_list_defaults(self) -> None:
         args = self._parse("list")
         assert args.command == "list"
+        assert args.type is None
         assert args.filter is None
         assert args.labels is None
         assert args.json is False
+
+    def test_list_type_flag(self) -> None:
+        args = self._parse("list", "--type", "kubernetes.io/tls")
+        assert args.command == "list"
+        assert args.type == "kubernetes.io/tls"
 
     def test_reveal_args(self) -> None:
         args = self._parse("reveal", "my-secret")
