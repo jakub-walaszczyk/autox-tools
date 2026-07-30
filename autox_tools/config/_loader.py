@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -105,6 +106,7 @@ def _build_milvus(raw: dict) -> MilvusConfig:
         user=raw.get("user", ""),
         password=raw.get("password", ""),
         secure=_parse_bool(raw.get("secure"), False),
+        server_pem_path=raw.get("server_pem_path", ""),
     )
 
 
@@ -200,6 +202,15 @@ def load_config(path: Path | None = None) -> AutoxConfig | None:
             except (KeyError, TypeError, ValueError) as exc:
                 sys.exit(f"Invalid {yaml_label}.{name} in {path}: {exc}")
         setattr(cfg, section, configs)
+
+    # Resolve relative Milvus cert paths against the config file's directory so
+    # the path holds regardless of the caller's working directory.
+    config_dir = path.parent
+    for name, milvus_cfg in cfg.milvus.items():
+        cert = milvus_cfg.server_pem_path
+        if cert and not Path(cert).is_absolute():
+            resolved = str((config_dir / cert).resolve())
+            cfg.milvus[name] = replace(milvus_cfg, server_pem_path=resolved)
 
     return cfg
 

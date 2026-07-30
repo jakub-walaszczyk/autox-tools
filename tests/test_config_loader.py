@@ -205,6 +205,41 @@ class TestLoadConfig:
             m = cfg.milvus["local-milvus"]
             assert isinstance(m, MilvusConfig)
             assert m.port == 19530
+            assert m.secure is False
+            assert m.server_pem_path == ""  # defaults empty when omitted
+
+    def test_milvus_server_pem_path_resolved_relative_to_config(self):
+        content = textwrap.dedent("""\
+            vs:
+              milvus:
+                secure-milvus:
+                  host: milvus.dev.example.com
+                  port: 19530
+                  secure: true
+                  server_pem_path: certs/milvus.crt
+        """)
+        with tempfile.TemporaryDirectory() as d:
+            path = _write_config(d, content)
+            cfg = load_config(path)
+            m = cfg.milvus["secure-milvus"]
+            assert m.secure is True
+            assert m.server_pem_path == str((Path(d) / "certs/milvus.crt").resolve())
+
+    def test_milvus_server_pem_path_absolute_preserved(self):
+        abs_cert = str(Path("/etc/milvus/ca.pem"))
+        content = textwrap.dedent(f"""\
+            vs:
+              milvus:
+                secure-milvus:
+                  host: milvus.dev.example.com
+                  port: 19530
+                  secure: true
+                  server_pem_path: {abs_cert}
+        """)
+        with tempfile.TemporaryDirectory() as d:
+            path = _write_config(d, content)
+            cfg = load_config(path)
+            assert cfg.milvus["secure-milvus"].server_pem_path == abs_cert
 
     def test_pgvector_config_parsed(self):
         with tempfile.TemporaryDirectory() as d:

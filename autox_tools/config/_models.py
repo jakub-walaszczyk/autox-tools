@@ -32,6 +32,9 @@ class MilvusConfig:
     user: str = ""
     password: str = ""
     secure: bool = False
+    # Path to the server/CA PEM certificate for one-way TLS. Passed through to
+    # pymilvus' ``server_pem_path``. Ignored when ``secure`` is False.
+    server_pem_path: str = ""
 
 
 @dataclass(frozen=True)

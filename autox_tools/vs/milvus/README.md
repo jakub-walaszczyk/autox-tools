@@ -15,7 +15,12 @@ vs:
       host: milvus.apps.dev-cluster.example.com
       port: 19530
       secure: false
+      # server_pem_path: local/milvus.crt   # server/CA PEM for one-way TLS
 ```
+
+For a TLS-enabled server, set `secure: true` and point `server_pem_path` at
+the server/CA certificate. Relative paths resolve against the `.autox.yaml`
+directory, so they work regardless of where you run the command.
 
 Then select them via CLI flags:
 
@@ -39,6 +44,7 @@ MILVUS_PORT=19530            # gRPC port
 MILVUS_USER=root             # Authentication username
 MILVUS_PASSWORD=Milvus       # Authentication password
 MILVUS_SECURE=false          # Set to "true" to enable TLS
+MILVUS_SERVER_PEM_PATH=      # Server/CA PEM cert for one-way TLS
 ```
 
 This path is used automatically when no `.autox.yaml` is present or no profile/target is specified.
