@@ -51,6 +51,15 @@ The `.autox.yaml` file has four top-level sections:
 
 Values support `${ENV_VAR}` interpolation so raw credentials stay out of the file.
 
+## File discovery
+
+The loader locates `.autox.yaml` in this order:
+
+1. Walk up from the current working directory — a project-local `.autox.yaml` always wins.
+2. Fall back to the path in the `AUTOX_CONFIG` environment variable.
+
+`AUTOX_CONFIG` is what lets the CLI run from **any** directory: the `install.sh` alias pins it to the project's `.autox.yaml` (alongside `--env-file` for `.env`), so profiles resolve identically no matter where you invoke the tool. A missing path is ignored gracefully, falling through to `.env`.
+
 See [`.autox.yaml.example`](../../.autox.example.yaml) for a fully annotated reference and the [main README](../../README.md#configuration) for the resolution order.
 
 ## Architecture

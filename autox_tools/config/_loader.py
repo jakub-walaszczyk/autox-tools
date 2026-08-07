@@ -1,8 +1,10 @@
 """Configuration file discovery, parsing, and profile resolution.
 
 Searches for ``.autox.yaml`` starting from the current working directory
-and walking up to filesystem root.  Values containing ``${ENV_VAR}``
-are interpolated from the process environment at load time.
+and walking up to filesystem root, then falling back to the path in the
+``AUTOX_CONFIG`` env var (set by the install alias so the CLI works from
+any directory).  Values containing ``${ENV_VAR}`` are interpolated from
+the process environment at load time.
 
 Resolution order (highest priority wins):
 
@@ -41,18 +43,38 @@ if TYPE_CHECKING:
     import argparse
 
 _CONFIG_FILENAME = ".autox.yaml"
+_CONFIG_ENV_VAR = "AUTOX_CONFIG"
 _ENV_VAR_RE = re.compile(r"\$\{([^}]+)}")
 
 # ── File discovery ──────────────────────────────────────────────────────────
 
 
 def find_config(start: str | Path | None = None) -> Path | None:
-    """Walk up from *start* (default: cwd) looking for ``.autox.yaml``."""
+    """Locate the ``.autox.yaml`` config file.
+
+    Discovery order:
+
+    1. Walk up from *start* (default: cwd) — a project-local ``.autox.yaml``
+       always wins, so per-directory configs keep working.
+    2. ``AUTOX_CONFIG`` env var — an explicit path used as the pinned default
+       when no local file is found.  This lets the CLI run from *any*
+       directory (the install alias points it at the project's config),
+       mirroring how ``--env-file`` pins ``.env``.
+
+    Returns ``None`` when neither step yields an existing file.
+    """
     current = Path(start or os.getcwd()).resolve()
     for directory in (current, *current.parents):
         candidate = directory / _CONFIG_FILENAME
         if candidate.is_file():
             return candidate
+
+    env_path = os.environ.get(_CONFIG_ENV_VAR, "").strip()
+    if env_path:
+        candidate = Path(env_path).expanduser()
+        if candidate.is_file():
+            return candidate
+
     return None
 
 

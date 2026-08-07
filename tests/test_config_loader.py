@@ -123,9 +123,32 @@ class TestFindConfig:
             assert result.parent == Path(d).resolve()
 
     def test_returns_none_when_missing(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory() as d, \
+             patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AUTOX_CONFIG", None)
             result = find_config(d)
             assert result is None
+
+    def test_env_var_used_when_no_local_file(self):
+        with tempfile.TemporaryDirectory() as pinned, \
+             tempfile.TemporaryDirectory() as cwd:
+            cfg_path = _write_config(pinned)
+            with patch.dict(os.environ, {"AUTOX_CONFIG": str(cfg_path)}):
+                assert find_config(cwd) == cfg_path
+
+    def test_local_file_wins_over_env_var(self):
+        with tempfile.TemporaryDirectory() as pinned, \
+             tempfile.TemporaryDirectory() as cwd:
+            _write_config(pinned)
+            _write_config(cwd)
+            with patch.dict(os.environ, {"AUTOX_CONFIG": str(Path(pinned) / ".autox.yaml")}):
+                assert find_config(cwd) == Path(cwd).resolve() / ".autox.yaml"
+
+    def test_env_var_ignored_when_file_missing(self):
+        with tempfile.TemporaryDirectory() as cwd:
+            missing = str(Path(cwd) / "nonexistent" / ".autox.yaml")
+            with patch.dict(os.environ, {"AUTOX_CONFIG": missing}):
+                assert find_config(cwd) is None
 
 
 # ── _interpolate ────────────────────────────────────────────────────────────

@@ -89,6 +89,13 @@ See [`.autox.yaml.example`](.autox.yaml.example) for the full annotated referenc
 
 Manage configs with `uv run config list`, `show`, and `validate`.
 
+**Config file discovery** walks up from the current directory, then falls back to the `AUTOX_CONFIG` env var. Running [`install.sh`](install.sh) creates an `axt` alias that pins both `AUTOX_CONFIG` (the project's `.autox.yaml`) and `--env-file` (the project's `.env`), so profiles and env vars resolve identically from **any** directory:
+
+```bash
+./install.sh          # adds: alias axt="AUTOX_CONFIG=.../.autox.yaml uv run --project ... --env-file .../.env"
+axt s3 -p dev list    # then run from anywhere
+```
+
 ### Environment variables (`.env`)
 
 Each tool also reads connection settings from environment variables. Place a `.env` file in the project root (or any parent directory) to avoid exporting variables manually. This path is used automatically when no `.autox.yaml` exists. See individual tool READMEs for required variables.
