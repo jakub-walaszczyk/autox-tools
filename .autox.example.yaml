@@ -35,6 +35,7 @@ profiles:
     milvus: local-milvus
     pgvector: local-pgvector
     ogx: dev-ogx
+    maas: dev-maas
 
   staging:
     s3: aws-staging
@@ -107,3 +108,14 @@ ogx:
   dev-ogx:
     base_url: https://ogx.apps.dev-cluster.example.com
     api_key: ${OGX_API_KEY}
+
+# ── MaaS (OpenShift Model-as-a-Service) configurations ──────────────────────
+# `base_url` is the host root only; the `maas` CLI appends `/maas-api/v1` for
+# model listing and derives each model's inference endpoint from its `owned_by`.
+
+maas:
+  dev-maas:
+    base_url: https://maas.base.url.openshiftapps.com
+    api_key: ${MAAS_API_KEY}
+    # Set false for clusters exposing self-signed TLS routes.
+    verify_tls: true

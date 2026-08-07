@@ -28,6 +28,7 @@ from dotenv import find_dotenv, load_dotenv
 from autox_tools.config._models import (
     _SERVICE_YAML_SECTIONS,
     AutoxConfig,
+    MaasConfig,
     MilvusConfig,
     OgxConfig,
     PgvectorConfig,
@@ -128,12 +129,21 @@ def _build_ogx(raw: dict) -> OgxConfig:
     )
 
 
+def _build_maas(raw: dict) -> MaasConfig:
+    return MaasConfig(
+        base_url=raw["base_url"],
+        api_key=raw.get("api_key", ""),
+        verify_tls=_parse_bool(raw.get("verify_tls"), True),
+    )
+
+
 _BUILDERS: dict[str, Any] = {
     "s3": _build_s3,
     "rhoai": _build_rhoai,
     "milvus": _build_milvus,
     "pgvector": _build_pgvector,
     "ogx": _build_ogx,
+    "maas": _build_maas,
 }
 
 _YAML_PATHS: dict[str, tuple[str, ...]] = {
@@ -142,6 +152,7 @@ _YAML_PATHS: dict[str, tuple[str, ...]] = {
     "milvus": ("vs", "milvus"),
     "pgvector": ("vs", "pgvector"),
     "ogx": ("ogx",),
+    "maas": ("maas",),
 }
 
 
@@ -153,6 +164,7 @@ def _build_profile(raw: dict) -> Profile:
         milvus=raw.get("milvus", ""),
         pgvector=raw.get("pgvector", ""),
         ogx=raw.get("ogx", ""),
+        maas=raw.get("maas", ""),
     )
 
 

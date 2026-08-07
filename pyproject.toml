@@ -8,6 +8,7 @@ dependencies = [
     "kfp>=2.15.2",
     "kubernetes>=28.0",
     "ogx-client>=1.0.2",
+    "openai>=1.30",
     "psycopg[binary]>=3.1",
     "pymilvus>=2.4",
     "python-dotenv>=1.0",
@@ -25,6 +26,7 @@ s3 = "autox_tools.s3.cli:main"
 autorag = "autox_tools.autorag.cli:main"
 automl = "autox_tools.automl.cli:main"
 ogx = "autox_tools.ogx.cli:main"
+maas = "autox_tools.maas.cli:main"
 secrets = "autox_tools.secrets.cli:main"
 config = "autox_tools.config.cli:main"
 
@@ -98,6 +100,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "ogx_client.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "openai.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

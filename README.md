@@ -33,6 +33,7 @@ uv run vs milvus --help
 | `vs milvus` | [`autox_tools/vs/milvus/`](autox_tools/vs/milvus/README.md) | Manage remote Milvus vector database instances -- list, inspect, query, export, and maintain collections |
 | `vs pgvector` | [`autox_tools/vs/pgvector/`](autox_tools/vs/pgvector/README.md) | Manage PostgreSQL/pgvector tables -- list, inspect, query, export, and maintain vector tables |
 | `ogx` | [`autox_tools/ogx/`](autox_tools/ogx/README.md) | Inspect and test models, providers, and vector stores on an OGX gateway |
+| `maas` | [`autox_tools/maas/`](autox_tools/maas/README.md) | List and sanity-check models served by OpenShift MaaS (Model-as-a-Service) |
 | `secrets` | [`autox_tools/secrets/`](autox_tools/secrets/README.md) | Manage Kubernetes Opaque secrets -- list, decode, create, update, and delete key-value secrets |
 | `config` | [`autox_tools/config/`](autox_tools/config/README.md) | Manage configuration profiles -- list, show, validate, and initialize `.autox.yaml` |
 
@@ -97,6 +98,7 @@ Each tool also reads connection settings from environment variables. Place a `.e
 | `AWS_*` | Data storage (experiment assets, datasets) | `s3` tool |
 | `ARTIFACTS_AWS_*` | Pipeline artifacts (evaluation results, notebooks, leaderboard) | `pipelines artifacts` subcommand |
 | `OGX_CLIENT_*` | OGX gateway connection (base URL, API key) | `ogx` tool |
+| `MAAS_*` | OpenShift MaaS connection (base URL, API key, TLS verification) | `maas` tool |
 | `RHOAI_*`, `K8S_*` | OpenShift cluster auth and K8S API access | `pipelines`, `secrets` tools |
 
 ## Development
@@ -155,6 +157,11 @@ autox-tools/
     ogx/               # OGX gateway CLI tool
       __init__.py
       _client.py       #   Connection factory (config or env vars -> OgxClient)
+      cli.py           #   argparse entry point and subcommands
+      README.md        #   Command reference and setup guide
+    maas/              # OpenShift MaaS CLI tool
+      __init__.py
+      _client.py       #   Settings resolution + OpenAI client / endpoint derivation
       cli.py           #   argparse entry point and subcommands
       README.md        #   Command reference and setup guide
     secrets/           # Kubernetes secret management tool

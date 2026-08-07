@@ -61,6 +61,7 @@ def cmd_list(args: argparse.Namespace) -> None:
         ("vs.milvus", cfg.milvus),
         ("vs.pgvector", cfg.pgvector),
         ("ogx", cfg.ogx),
+        ("maas", cfg.maas),
     ]
     for section_name, configs in sections:
         if configs:
@@ -90,6 +91,7 @@ def cmd_show(args: argparse.Namespace) -> None:
         ("vs.milvus", profile.milvus, cfg.milvus),
         ("vs.pgvector", profile.pgvector, cfg.pgvector),
         ("ogx", profile.ogx, cfg.ogx),
+        ("maas", profile.maas, cfg.maas),
     ]
     for label, config_name, store in mappings:
         if not config_name:
@@ -122,6 +124,7 @@ def cmd_validate(args: argparse.Namespace) -> None:
             ("vs.milvus", profile.milvus, cfg.milvus),
             ("vs.pgvector", profile.pgvector, cfg.pgvector),
             ("ogx", profile.ogx, cfg.ogx),
+            ("maas", profile.maas, cfg.maas),
         ]
         for label, config_name, store in mappings:
             if config_name and config_name not in store:
@@ -143,7 +146,7 @@ def cmd_validate(args: argparse.Namespace) -> None:
     print(f"  {len(cfg.profiles)} profile(s), "
           f"{len(cfg.s3)} s3, {len(cfg.rhoai)} rhoai, "
           f"{len(cfg.milvus)} vs.milvus, {len(cfg.pgvector)} vs.pgvector, "
-          f"{len(cfg.ogx)} ogx config(s)")
+          f"{len(cfg.ogx)} ogx, {len(cfg.maas)} maas config(s)")
 
 
 def cmd_init(args: argparse.Namespace) -> None:
@@ -175,6 +178,7 @@ profiles:
     # milvus: my-milvus
     # pgvector: my-pgvector
     # ogx: my-ogx
+    # maas: my-maas
 
 s3:
   my-s3:

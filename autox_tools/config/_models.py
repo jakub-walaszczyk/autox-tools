@@ -54,6 +54,16 @@ class OgxConfig:
 
 
 @dataclass(frozen=True)
+class MaasConfig:
+    # MaaS host root, without any API path (e.g. "https://maas.apps.<cluster>").
+    # The listing endpoint and per-model inference endpoints are derived from it.
+    base_url: str
+    api_key: str = ""
+    # Set False for clusters exposing self-signed TLS routes.
+    verify_tls: bool = True
+
+
+@dataclass(frozen=True)
 class Profile:
     s3: str = ""
     artifacts_s3: str = ""
@@ -61,6 +71,7 @@ class Profile:
     milvus: str = ""
     pgvector: str = ""
     ogx: str = ""
+    maas: str = ""
 
 
 SERVICE_CONFIG_TYPES: dict[str, type] = {
@@ -70,6 +81,7 @@ SERVICE_CONFIG_TYPES: dict[str, type] = {
     "milvus": MilvusConfig,
     "pgvector": PgvectorConfig,
     "ogx": OgxConfig,
+    "maas": MaasConfig,
 }
 
 _SERVICE_ATTRS: dict[str, str] = {
@@ -79,6 +91,7 @@ _SERVICE_ATTRS: dict[str, str] = {
     "milvus": "milvus",
     "pgvector": "pgvector",
     "ogx": "ogx",
+    "maas": "maas",
 }
 
 _SERVICE_YAML_SECTIONS: dict[str, str] = {
@@ -88,6 +101,7 @@ _SERVICE_YAML_SECTIONS: dict[str, str] = {
     "milvus": "vs.milvus",
     "pgvector": "vs.pgvector",
     "ogx": "ogx",
+    "maas": "maas",
 }
 
 
@@ -100,6 +114,7 @@ class AutoxConfig:
     milvus: dict[str, MilvusConfig] = field(default_factory=dict)
     pgvector: dict[str, PgvectorConfig] = field(default_factory=dict)
     ogx: dict[str, OgxConfig] = field(default_factory=dict)
+    maas: dict[str, MaasConfig] = field(default_factory=dict)
 
     def service_configs(self, service_type: str) -> dict:
         attr = _SERVICE_ATTRS.get(service_type, service_type)

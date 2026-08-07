@@ -10,7 +10,7 @@ Manage `.autox.yaml` configuration profiles -- list available profiles and servi
 uv run config list
 ```
 
-Displays all defined profiles (with their service mappings) and all named service configurations grouped by type (s3, rhoai, vs.milvus, vs.pgvector, ogx).
+Displays all defined profiles (with their service mappings) and all named service configurations grouped by type (s3, rhoai, vs.milvus, vs.pgvector, ogx, maas).
 
 ### `show` -- Show resolved config for a profile
 
@@ -46,7 +46,7 @@ The `.autox.yaml` file has four top-level sections:
 |---|---|
 | `defaults` | Default profile name (`defaults.profile`) |
 | `profiles` | Named profiles mapping service types to named configs |
-| `s3`, `rhoai`, `ogx` | Top-level service config blocks |
+| `s3`, `rhoai`, `ogx`, `maas` | Top-level service config blocks |
 | `vs.milvus`, `vs.pgvector` | Vector store configs nested under `vs` |
 
 Values support `${ENV_VAR}` interpolation so raw credentials stay out of the file.
