@@ -55,8 +55,8 @@ class OgxConfig:
 
 @dataclass(frozen=True)
 class MaasConfig:
-    # MaaS host root, without any API path (e.g. "https://maas.apps.<cluster>").
-    # The listing endpoint and per-model inference endpoints are derived from it.
+    # OpenAI-compatible base URL ending in "/v1" (e.g. "https://maas.apps.<cluster>/v1").
+    # Listing and inference share this one endpoint; the "/v1" suffix is added if omitted.
     base_url: str
     api_key: str = ""
     # Set False for clusters exposing self-signed TLS routes.

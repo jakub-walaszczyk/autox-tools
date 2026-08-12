@@ -6,11 +6,11 @@ Usage::
     uv run maas info <model-id> [--json]
     uv run maas check [model-id] [--type {auto,llm,embedding}] [--prompt TEXT] [--input TEXT] [--json]
 
-OpenShift MaaS carries no metadata distinguishing foundation (LLM) from
-embedding models, so ``models`` lists every deployed model without a type
-column and ``check`` probes each model to discover how it responds. Because
-inference is served per-model at ``/{owned_by}/v1`` (not by the listing
-endpoint), ``check`` first lists the models to derive each per-model URL.
+MaaS serves listing and inference from a single OpenAI-compatible base URL; the
+target model is selected per request by id. MaaS carries no metadata
+distinguishing foundation (LLM) from embedding models, so ``models`` lists every
+deployed model without a type column and ``check`` probes each model to discover
+how it responds.
 """
 
 from __future__ import annotations
@@ -36,43 +36,36 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 # OpenAI Model attributes surfaced explicitly; everything else is treated as extra.
+# The short "name" is derived from the id, so it is not a distinct model field.
 _KNOWN_MODEL_FIELDS = ("id", "created", "object", "owned_by")
+
+# Placeholder shown in table columns when a model omits an optional field.
+_EMPTY = "—"
 
 
 def _format_ts(unix_ts: int | float | None) -> str:
     """Format a Unix timestamp as a human-readable UTC string."""
     if unix_ts is None:
-        return "—"
+        return _EMPTY
     try:
         return datetime.fromtimestamp(int(unix_ts), tz=UTC).strftime("%Y-%m-%d %H:%M")
     except (ValueError, OSError, TypeError):
         return str(unix_ts)
 
 
-def _short_id(model: object) -> str:
-    """Return the short, callable model id (final path segment of the full id).
-
-    MaaS lists models with fully-qualified ids such as
-    ``publishers/ai-eng-cracow/models/qwen3-8b``; the last segment is the id
-    used when calling chat/embeddings on the per-model endpoint.
-    """
-    full = str(getattr(model, "id", ""))
-    return full.rsplit("/", 1)[-1]
-
-
-def _owned_by(model: object) -> str:
-    """Return the ``owned_by`` path prefix used to build the per-model endpoint.
-
-    Falls back to deriving ``<namespace>/<short-id>`` from the full id
-    (``publishers/<namespace>/models/<short-id>``) when ``owned_by`` is absent.
-    """
-    owned = getattr(model, "owned_by", None)
-    if owned:
-        return str(owned)
-    parts = str(getattr(model, "id", "")).split("/")
-    if len(parts) >= 4:
-        return f"{parts[1]}/{parts[-1]}"
+def _model_id(model: object) -> str:
+    """Return the model id passed to chat/embeddings requests as the ``model`` param."""
     return str(getattr(model, "id", ""))
+
+
+def _model_name(model: object) -> str:
+    """Return the model's short name: the final path segment of its id.
+
+    MaaS ids are frequently fully-qualified (e.g.
+    ``publishers/ai-eng-cracow/models/qwen3-8b``); the trailing segment is the
+    concise, human-readable name. When the id has no ``/`` it is returned as-is.
+    """
+    return _model_id(model).rsplit("/", 1)[-1]
 
 
 def _model_dict(model: object) -> dict[str, Any]:
@@ -95,7 +88,7 @@ def _extra_fields(model: object) -> dict[str, Any]:
 def _compact_metadata(meta: dict[str, Any] | None, max_width: int = 60) -> str:
     """Render a metadata dict as a truncated ``key=val, ...`` string."""
     if not meta:
-        return "—"
+        return _EMPTY
     text = ", ".join(f"{k}={v}" for k, v in sorted(meta.items()))
     if len(text) > max_width:
         return text[: max_width - 1] + "…"
@@ -103,18 +96,18 @@ def _compact_metadata(meta: dict[str, Any] | None, max_width: int = 60) -> str:
 
 
 def _list_models(client: OpenAI) -> list:
-    """List models from the general endpoint, sorted by short id."""
+    """List models from the MaaS endpoint, sorted by id."""
     response = client.models.list()
     data = getattr(response, "data", None)
     if data is None:
         data = list(response)  # OpenAI SyncPage is also directly iterable
-    return sorted(data, key=_short_id)
+    return sorted(data, key=_model_id)
 
 
 def _find_model(models: list[object], model_id: str) -> object | None:
-    """Locate a model by its short id or its fully-qualified id."""
+    """Locate a model by its id or its human-readable name."""
     for model in models:
-        if _short_id(model) == model_id or str(getattr(model, "id", "")) == model_id:
+        if _model_id(model) == model_id or _model_name(model) == model_id:
             return model
     return None
 
@@ -136,11 +129,9 @@ def cmd_models(client: OpenAI, settings: MaasSettings, args: argparse.Namespace)
             "total": len(models),
             "models": [
                 {
-                    "id": str(getattr(m, "id", "")),
-                    "name": _short_id(m),
-                    "owned_by": _owned_by(m),
+                    "id": _model_id(m),
+                    "name": _model_name(m) or None,
                     "created": getattr(m, "created", None),
-                    "endpoint": _client.model_endpoint(settings.base_url, _owned_by(m)),
                     "extra": _extra_fields(m) or None,
                 }
                 for m in models
@@ -154,11 +145,11 @@ def cmd_models(client: OpenAI, settings: MaasSettings, args: argparse.Namespace)
 
     show_meta = getattr(args, "metadata", False)
 
-    max_id = max(len("Model ID"), max(len(_short_id(m)) for m in models))
-    max_owner = max(len("Owned by"), max(len(_owned_by(m)) for m in models))
+    max_id = max(len("ID"), max(len(_model_id(m)) for m in models))
+    max_name = max(len("Name"), max(len(_model_name(m) or _EMPTY) for m in models))
 
-    header = f"  {'Model ID':<{max_id}}   {'Owned by':<{max_owner}}   {'Created':<16}"
-    sep = f"  {'─' * max_id}   {'─' * max_owner}   {'─' * 16}"
+    header = f"  {'ID':<{max_id}}   {'Name':<{max_name}}   {'Created':<16}"
+    sep = f"  {'─' * max_id}   {'─' * max_name}   {'─' * 16}"
     if show_meta:
         header += "   Metadata"
         sep += "   " + "─" * 8
@@ -166,7 +157,7 @@ def cmd_models(client: OpenAI, settings: MaasSettings, args: argparse.Namespace)
     print(sep)
     for m in models:
         created = _format_ts(getattr(m, "created", None))
-        row = f"  {_short_id(m):<{max_id}}   {_owned_by(m):<{max_owner}}   {created:<16}"
+        row = f"  {_model_id(m):<{max_id}}   {(_model_name(m) or _EMPTY):<{max_name}}   {created:<16}"
         if show_meta:
             row += "   " + _compact_metadata(_extra_fields(m))
         print(row)
@@ -178,24 +169,23 @@ def cmd_info(client: OpenAI, settings: MaasSettings, args: argparse.Namespace) -
     """Show detailed information for a single model, including its inference endpoint.
 
     The model is located within the listing (MaaS has no per-model retrieve
-    endpoint), matched by short id or fully-qualified id.
+    endpoint), matched by id or name.
     """
     model_id: str = args.model_id
     models = _list_models(client)
     model = _find_model(models, model_id)
     if model is None:
-        available = ", ".join(_short_id(m) for m in models) or "(none listed)"
+        available = ", ".join(_model_id(m) for m in models) or "(none listed)"
         sys.exit(f"Model '{model_id}' not found in MaaS. Available: {available}")
 
-    short = _short_id(model)
-    full = str(getattr(model, "id", short))
-    owned = _owned_by(model)
-    endpoint = _client.model_endpoint(settings.base_url, owned)
+    mid = _model_id(model)
+    name = _model_name(model)
+    endpoint = _client.api_endpoint(settings.base_url)
     created = getattr(model, "created", None)
     extra = _extra_fields(model)
 
     if args.json:
-        data: dict[str, Any] = {"id": full, "name": short, "owned_by": owned, "endpoint": endpoint}
+        data: dict[str, Any] = {"id": mid, "name": name or None, "endpoint": endpoint}
         if created is not None:
             data["created"] = created
         if extra:
@@ -204,9 +194,8 @@ def cmd_info(client: OpenAI, settings: MaasSettings, args: argparse.Namespace) -
         return
 
     fields: list[tuple[str, str]] = [
-        ("ID", full),
-        ("Name", short),
-        ("Owned by", owned),
+        ("ID", mid),
+        ("Name", name or _EMPTY),
         ("Endpoint", endpoint),
     ]
     if created is not None:
@@ -240,27 +229,21 @@ def _probe_embedding(mc: OpenAI, model_id: str, text: str) -> int:
     return len(embedding) if isinstance(embedding, list) else 0
 
 
-def _run_check(settings: MaasSettings, model: object, mode: str, prompt: str, input_text: str) -> dict[str, Any]:
+def _run_check(client: OpenAI, model: object, mode: str, prompt: str, input_text: str) -> dict[str, Any]:
     """Probe a single model and return a structured result.
 
     With ``mode="auto"`` the model is probed as an LLM first, then as an
     embedding model; the first successful modality wins. With ``mode="llm"`` or
     ``mode="embedding"`` only that modality is attempted.
     """
-    short = _short_id(model)
-    owned = _owned_by(model)
-    result: dict[str, Any] = {
-        "model_id": short,
-        "owned_by": owned,
-        "endpoint": _client.model_endpoint(settings.base_url, owned),
-    }
-    mc = _client.model_client(settings, owned)
+    model_id = _model_id(model)
+    result: dict[str, Any] = {"model_id": model_id}
 
     llm_err = emb_err = ""
 
     if mode in ("auto", "llm"):
         try:
-            content = _probe_llm(mc, short, prompt)
+            content = _probe_llm(client, model_id, prompt)
             return {**result, "status": "pass", "detected_type": "llm", "response": content}
         except Exception as exc:  # surface any client/transport error as a failure
             llm_err = str(exc)
@@ -269,7 +252,7 @@ def _run_check(settings: MaasSettings, model: object, mode: str, prompt: str, in
 
     if mode in ("auto", "embedding"):
         try:
-            dims = _probe_embedding(mc, short, input_text)
+            dims = _probe_embedding(client, model_id, input_text)
             return {**result, "status": "pass", "detected_type": "embedding", "dimensions": dims}
         except Exception as exc:  # surface any client/transport error as a failure
             emb_err = str(exc)
@@ -287,18 +270,16 @@ def _run_check(settings: MaasSettings, model: object, mode: str, prompt: str, in
 def _print_check_result(result: dict[str, Any]) -> None:
     """Print a single check result in human-readable form."""
     status = str(result["status"]).upper()
-    print(f"Model    : {result['model_id']}")
-    print(f"Owned by : {result['owned_by']}")
-    print(f"Endpoint : {result['endpoint']}")
-    print(f"Type     : {result.get('detected_type', 'unknown')}")
-    print(f"Status   : {status}")
+    print(f"Model  : {result['model_id']}")
+    print(f"Type   : {result.get('detected_type', 'unknown')}")
+    print(f"Status : {status}")
     if result["status"] == "pass":
         if result.get("detected_type") == "embedding":
             print(f"Dimensions : {result.get('dimensions', 0)}")
         else:
             print(f"Response : {result.get('response', '')}")
     else:
-        print(f"Error    : {result.get('error', '')}")
+        print(f"Error  : {result.get('error', '')}")
 
 
 def _print_check_summary(results: list[dict[str, Any]]) -> None:
@@ -342,8 +323,8 @@ def _print_check_summary(results: list[dict[str, Any]]) -> None:
 def cmd_check(client: OpenAI, settings: MaasSettings, args: argparse.Namespace) -> None:
     """Sanity-check one or all MaaS models by issuing a live inference request.
 
-    Discovery (listing) always runs first so each model's per-model endpoint can
-    be derived from its ``owned_by`` prefix.
+    Discovery (listing) runs first so each listed model can be probed by id
+    against the shared inference endpoint.
     """
     models = _list_models(client)
     mode: str = args.type
@@ -354,16 +335,16 @@ def cmd_check(client: OpenAI, settings: MaasSettings, args: argparse.Namespace) 
     if model_id is not None:
         model = _find_model(models, model_id)
         if model is None:
-            available = ", ".join(_short_id(m) for m in models) or "(none listed)"
+            available = ", ".join(_model_id(m) for m in models) or "(none listed)"
             sys.exit(f"Model '{model_id}' not found in MaaS. Available: {available}")
-        result = _run_check(settings, model, mode, prompt, input_text)
+        result = _run_check(client, model, mode, prompt, input_text)
         if args.json:
             print_json(result)
         else:
             _print_check_result(result)
         return
 
-    results = [_run_check(settings, m, mode, prompt, input_text) for m in models]
+    results = [_run_check(client, m, mode, prompt, input_text) for m in models]
     if args.json:
         print_json({"total": len(results), "results": results})
     else:
@@ -397,7 +378,7 @@ def _abort_on_api_error(exc: APIError, settings: MaasSettings) -> NoReturn:
     user. This distills the failure to the endpoint, HTTP status, and a
     remediation hint before exiting non-zero.
     """
-    endpoint = _client.list_endpoint(settings.base_url)
+    endpoint = _client.api_endpoint(settings.base_url)
     request = getattr(exc, "request", None)
     url = str(getattr(request, "url", "") or endpoint)
 

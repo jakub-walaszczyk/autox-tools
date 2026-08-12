@@ -110,12 +110,12 @@ ogx:
     api_key: ${OGX_API_KEY}
 
 # ── MaaS (OpenShift Model-as-a-Service) configurations ──────────────────────
-# `base_url` is the host root only; the `maas` CLI appends `/maas-api/v1` for
-# model listing and derives each model's inference endpoint from its `owned_by`.
+# `base_url` is the OpenAI-compatible base URL ending in `/v1`. Listing and
+# inference share this one endpoint; the target model is selected per request.
 
 maas:
   dev-maas:
-    base_url: https://maas.base.url.openshiftapps.com
+    base_url: https://maas.base.url.openshiftapps.com/v1
     api_key: ${MAAS_API_KEY}
     # Set false for clusters exposing self-signed TLS routes.
     verify_tls: true

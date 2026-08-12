@@ -7,17 +7,14 @@ parallel while support for OGX is phased out.
 
 ## How MaaS differs from OGX
 
-MaaS exposes an OpenAI-compatible surface split across two kinds of endpoints:
-
-- A **general** endpoint at `{base_url}/maas-api/v1` that serves the model
-  *listing* only.
-- A **per-model** endpoint at `{scheme}://{host}/{owned_by}/v1` that serves
-  chat/embedding inference for a single model.
+MaaS exposes a **single OpenAI-compatible base URL** ending in `/v1`. That one
+endpoint serves both the model *listing* (`GET /models`) and inference
+(chat/embeddings); the target model is selected per request via the standard
+`model` parameter, so no per-model URL is needed.
 
 Because MaaS carries **no metadata distinguishing LLM from embedding models**,
 `models` lists every deployed model without a type column, and `check` probes a
-model to discover how it responds. Inference is served per-model, so `check`
-first lists the models to derive each per-model URL from its `owned_by` prefix.
+model to discover how it responds.
 
 ## Setup
 
@@ -30,13 +27,14 @@ uv run maas -p dev models                    # use the "dev" profile
 uv run maas -t dev-maas models               # target a named config directly
 ```
 
-`base_url` is the **host root only** (no API path); the CLI appends
-`/maas-api/v1` for listing and derives per-model endpoints automatically.
+`base_url` is the **OpenAI-compatible base URL ending in `/v1`**. Listing and
+inference share this one endpoint; the `/v1` suffix is added automatically when
+omitted.
 
 ```yaml
 maas:
   dev-maas:
-    base_url: https://maas.apps.<cluster>.openshiftapps.com
+    base_url: https://maas.apps.<cluster>.openshiftapps.com/v1
     api_key: ${MAAS_API_KEY}
     verify_tls: true          # set false for self-signed cluster routes
 ```
@@ -53,7 +51,7 @@ profile/target is specified.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `MAAS_BASE_URL` | yes | -- | MaaS host root (no API path) |
+| `MAAS_BASE_URL` | yes | -- | OpenAI-compatible base URL ending in `/v1` |
 | `MAAS_API_KEY` | no | -- | API key/token for authentication |
 | `MAAS_VERIFY_TLS` | no | `true` | Set `false`/`0`/`no` to skip TLS verification |
 
@@ -62,21 +60,21 @@ profile/target is specified.
 ### `models` -- List available models
 
 ```bash
-uv run maas models                    # short id, owner, created
+uv run maas models                    # id, name, created
 uv run maas models --metadata         # include a column with MaaS-specific extra fields
-uv run maas --json models             # JSON output (id, name, owner, and endpoint)
+uv run maas --json models             # JSON output (id, name, created, extra)
 ```
 
 ### `info` -- Show detailed model information
 
 ```bash
-uv run maas info <model-id>           # short or fully-qualified id
+uv run maas info <model-id>           # match by id or name
 uv run maas --json info <model-id>    # JSON output
 ```
 
 Locates the model within the listing (MaaS has no per-model retrieve endpoint)
-and prints its fully-qualified `id`, short `name`, `owned_by`, derived inference
-endpoint, creation time, and any extra fields.
+and prints its `id`, `name`, the shared inference endpoint, creation time, and
+any extra fields.
 
 ### `check` -- Model sanity check
 

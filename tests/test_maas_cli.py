@@ -23,20 +23,21 @@ from autox_tools.maas._client import MaasSettings
 # Fixtures
 # ---------------------------------------------------------------------------
 
+# base_url intentionally omits the "/v1" suffix to exercise its auto-append.
 _SETTINGS = MaasSettings(base_url="https://maas.example.com", api_key="test-key", verify_tls=True)
 
 
 def _make_model(
     model_id: str = "publishers/ns/models/qwen3-8b",
-    owned_by: str | None = "ns/qwen3-8b",
     created: int = 1_700_000_000,
     **extra: object,
 ) -> SimpleNamespace:
-    """Build a fake OpenAI Model object as returned by MaaS listing."""
-    fields: dict[str, object] = {"id": model_id, "created": created, **extra}
-    if owned_by is not None:
-        fields["owned_by"] = owned_by
-    return SimpleNamespace(**fields)
+    """Build a fake OpenAI Model object as returned by MaaS listing.
+
+    MaaS ids are typically fully-qualified; the short name is derived from the
+    final path segment, so the default id yields the name ``qwen3-8b``.
+    """
+    return SimpleNamespace(id=model_id, created=created, **extra)
 
 
 def _completion(content: str = "4") -> SimpleNamespace:
@@ -69,58 +70,40 @@ def _args(**kwargs: object) -> argparse.Namespace:
 # _client.py tests
 # ---------------------------------------------------------------------------
 
-class TestEndpoints:
-    def test_list_endpoint_appends_suffix(self):
-        assert _client.list_endpoint("https://maas.example.com") == "https://maas.example.com/maas-api/v1"
+class TestApiEndpoint:
+    def test_appends_v1_suffix(self):
+        assert _client.api_endpoint("https://maas.example.com") == "https://maas.example.com/v1"
 
-    def test_list_endpoint_strips_trailing_slash(self):
-        assert _client.list_endpoint("https://maas.example.com/") == "https://maas.example.com/maas-api/v1"
+    def test_strips_trailing_slash(self):
+        assert _client.api_endpoint("https://maas.example.com/") == "https://maas.example.com/v1"
 
-    def test_list_endpoint_idempotent(self):
-        url = "https://maas.example.com/maas-api/v1"
-        assert _client.list_endpoint(url) == url
-
-    def test_model_endpoint_uses_owned_by(self):
-        assert (
-            _client.model_endpoint("https://maas.example.com", "ns/qwen3-8b")
-            == "https://maas.example.com/ns/qwen3-8b/v1"
-        )
-
-    def test_model_endpoint_discards_path(self):
-        assert (
-            _client.model_endpoint("https://maas.example.com/maas-api/v1", "ns/foo")
-            == "https://maas.example.com/ns/foo/v1"
-        )
-
-    def test_model_endpoint_strips_owned_by_slashes(self):
-        assert (
-            _client.model_endpoint("https://maas.example.com", "/ns/foo/")
-            == "https://maas.example.com/ns/foo/v1"
-        )
+    def test_idempotent(self):
+        url = "https://maas.example.com/v1"
+        assert _client.api_endpoint(url) == url
 
 
 class TestResolveSettings:
     def test_from_config(self):
-        cfg = SimpleNamespace(base_url="https://c.example.com", api_key="ck", verify_tls=False)
+        cfg = SimpleNamespace(base_url="https://c.example.com/v1", api_key="ck", verify_tls=False)
         settings = _client.resolve_settings(cfg)
-        assert settings.base_url == "https://c.example.com"
+        assert settings.base_url == "https://c.example.com/v1"
         assert settings.api_key == "ck"
         assert settings.verify_tls is False
 
     def test_from_env(self):
-        env = {"MAAS_BASE_URL": "https://e.example.com", "MAAS_API_KEY": "ek"}
+        env = {"MAAS_BASE_URL": "https://e.example.com/v1", "MAAS_API_KEY": "ek"}
         with (
             patch.dict(os.environ, env, clear=True),
             patch("autox_tools.maas._client.load_dotenv"),
             patch("autox_tools.maas._client.find_dotenv", return_value=""),
         ):
             settings = _client.resolve_settings(None)
-        assert settings.base_url == "https://e.example.com"
+        assert settings.base_url == "https://e.example.com/v1"
         assert settings.api_key == "ek"
         assert settings.verify_tls is True
 
     def test_env_verify_tls_false(self):
-        env = {"MAAS_BASE_URL": "https://e.example.com", "MAAS_VERIFY_TLS": "false"}
+        env = {"MAAS_BASE_URL": "https://e.example.com/v1", "MAAS_VERIFY_TLS": "false"}
         with (
             patch.dict(os.environ, env, clear=True),
             patch("autox_tools.maas._client.load_dotenv"),
@@ -140,31 +123,31 @@ class TestResolveSettings:
 
 
 class TestClientBuild:
-    def test_connect_targets_list_endpoint(self):
+    def test_connect_targets_v1_endpoint(self):
         with patch("autox_tools.maas._client.OpenAI") as mock_openai:
             _client.connect(_SETTINGS)
             _, kwargs = mock_openai.call_args
-            assert kwargs["base_url"] == "https://maas.example.com/maas-api/v1"
+            assert kwargs["base_url"] == "https://maas.example.com/v1"
             assert kwargs["api_key"] == "test-key"
             assert kwargs["http_client"] is None
 
     def test_empty_api_key_uses_placeholder(self):
-        settings = MaasSettings(base_url="https://maas.example.com", api_key="")
+        settings = MaasSettings(base_url="https://maas.example.com/v1", api_key="")
         with patch("autox_tools.maas._client.OpenAI") as mock_openai:
             _client.connect(settings)
             _, kwargs = mock_openai.call_args
             assert kwargs["api_key"] == "EMPTY"
 
     def test_verify_false_builds_insecure_http_client(self):
-        settings = MaasSettings(base_url="https://maas.example.com", api_key="k", verify_tls=False)
+        settings = MaasSettings(base_url="https://maas.example.com/v1", api_key="k", verify_tls=False)
         with (
             patch("autox_tools.maas._client.OpenAI") as mock_openai,
             patch("autox_tools.maas._client.httpx.Client") as mock_httpx,
         ):
-            _client.model_client(settings, "ns/foo")
+            _client.connect(settings)
             mock_httpx.assert_called_once_with(verify=False)
             _, kwargs = mock_openai.call_args
-            assert kwargs["base_url"] == "https://maas.example.com/ns/foo/v1"
+            assert kwargs["base_url"] == "https://maas.example.com/v1"
             assert kwargs["http_client"] is mock_httpx.return_value
 
 
@@ -173,21 +156,17 @@ class TestClientBuild:
 # ---------------------------------------------------------------------------
 
 class TestHelpers:
-    def test_short_id(self):
-        assert cli._short_id(_make_model("publishers/ns/models/foo")) == "foo"
+    def test_model_id(self):
+        assert cli._model_id(_make_model("publishers/ns/models/qwen3-8b")) == "publishers/ns/models/qwen3-8b"
 
-    def test_short_id_no_slash(self):
-        assert cli._short_id(_make_model("bare-model")) == "bare-model"
+    def test_model_name_is_final_segment(self):
+        assert cli._model_name(_make_model("publishers/ns/models/qwen3-8b")) == "qwen3-8b"
 
-    def test_owned_by_present(self):
-        assert cli._owned_by(_make_model(owned_by="ns/foo")) == "ns/foo"
-
-    def test_owned_by_derived_from_id(self):
-        model = _make_model("publishers/ai-eng/models/foo", owned_by=None)
-        assert cli._owned_by(model) == "ai-eng/foo"
+    def test_model_name_no_slash(self):
+        assert cli._model_name(_make_model("bare-model")) == "bare-model"
 
     def test_extra_fields_excludes_known(self):
-        model = _make_model(object="model", root="qwen")
+        model = _make_model("publishers/ns/models/foo", object="model", root="qwen")
         extra = cli._extra_fields(model)
         assert extra == {"root": "qwen"}
 
@@ -201,10 +180,10 @@ class TestHelpers:
         assert cli._compact_metadata(None) == "—"
         assert cli._compact_metadata({"b": 2, "a": 1}) == "a=1, b=2"
 
-    def test_find_model_by_short_and_full_id(self):
-        models = [_make_model("publishers/ns/models/foo"), _make_model("publishers/ns/models/bar", owned_by="ns/bar")]
-        assert cli._find_model(models, "foo") is models[0]
-        assert cli._find_model(models, "publishers/ns/models/bar") is models[1]
+    def test_find_model_by_full_id_and_name(self):
+        models = [_make_model("publishers/ns/models/foo"), _make_model("publishers/ns/models/bar")]
+        assert cli._find_model(models, "publishers/ns/models/foo") is models[0]  # full id
+        assert cli._find_model(models, "bar") is models[1]                       # short name
         assert cli._find_model(models, "missing") is None
 
 
@@ -216,13 +195,13 @@ class TestCmdModels:
     def test_list(self, capsys: pytest.CaptureFixture[str]):
         client = MagicMock()
         client.models.list.return_value = _list_response([
-            _make_model("publishers/ns/models/qwen3-8b", "ns/qwen3-8b"),
-            _make_model("publishers/ns/models/granite-embed", "ns/granite-embed"),
+            _make_model("publishers/ns/models/qwen3-8b"),
+            _make_model("publishers/ns/models/granite-embed"),
         ])
         cli.cmd_models(client, _SETTINGS, _args(command="models"))
         out = capsys.readouterr().out
-        assert "qwen3-8b" in out
-        assert "granite-embed" in out
+        assert "publishers/ns/models/qwen3-8b" in out  # full id column
+        assert "granite-embed" in out                  # short name column
         assert "2 model(s)" in out
 
     def test_empty(self, capsys: pytest.CaptureFixture[str]):
@@ -233,18 +212,19 @@ class TestCmdModels:
 
     def test_json(self, capsys: pytest.CaptureFixture[str]):
         client = MagicMock()
-        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/foo", "ns/foo")])
+        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/foo")])
         cli.cmd_models(client, _SETTINGS, _args(command="models", json=True))
         data = json.loads(capsys.readouterr().out)
         assert data["total"] == 1
-        assert data["models"][0]["id"] == "publishers/ns/models/foo"
-        assert data["models"][0]["name"] == "foo"
-        assert data["models"][0]["owned_by"] == "ns/foo"
-        assert data["models"][0]["endpoint"] == "https://maas.example.com/ns/foo/v1"
+        model = data["models"][0]
+        assert model["id"] == "publishers/ns/models/foo"
+        assert model["name"] == "foo"
+        assert "owned_by" not in model
+        assert "endpoint" not in model
 
     def test_metadata_column(self, capsys: pytest.CaptureFixture[str]):
         client = MagicMock()
-        model = _make_model("publishers/ns/models/foo", "ns/foo", root="qwen")
+        model = _make_model("publishers/ns/models/foo", root="qwen")
         client.models.list.return_value = _list_response([model])
         cli.cmd_models(client, _SETTINGS, _args(command="models", metadata=True))
         out = capsys.readouterr().out
@@ -257,31 +237,37 @@ class TestCmdModels:
 # ---------------------------------------------------------------------------
 
 class TestCmdInfo:
-    def test_info(self, capsys: pytest.CaptureFixture[str]):
+    def test_info_by_name(self, capsys: pytest.CaptureFixture[str]):
         client = MagicMock()
-        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/foo", "ns/foo")])
+        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/foo")])
         cli.cmd_info(client, _SETTINGS, _args(command="info", model_id="foo"))
         out = capsys.readouterr().out
-        assert "foo" in out
-        assert "ns/foo" in out
-        assert "https://maas.example.com/ns/foo/v1" in out
+        assert "publishers/ns/models/foo" in out
+        assert "https://maas.example.com/v1" in out
+
+    def test_info_by_full_id(self, capsys: pytest.CaptureFixture[str]):
+        client = MagicMock()
+        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/foo")])
+        cli.cmd_info(client, _SETTINGS, _args(command="info", model_id="publishers/ns/models/foo"))
+        assert "foo" in capsys.readouterr().out
 
     def test_info_not_found_exits(self):
         client = MagicMock()
-        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/foo", "ns/foo")])
+        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/foo")])
         with pytest.raises(SystemExit, match="not found"):
             cli.cmd_info(client, _SETTINGS, _args(command="info", model_id="missing"))
 
     def test_info_json(self, capsys: pytest.CaptureFixture[str]):
         client = MagicMock()
-        model = _make_model("publishers/ns/models/foo", "ns/foo", root="qwen")
+        model = _make_model("publishers/ns/models/foo", root="qwen")
         client.models.list.return_value = _list_response([model])
         cli.cmd_info(client, _SETTINGS, _args(command="info", model_id="foo", json=True))
         data = json.loads(capsys.readouterr().out)
         assert data["id"] == "publishers/ns/models/foo"
         assert data["name"] == "foo"
-        assert data["endpoint"] == "https://maas.example.com/ns/foo/v1"
+        assert data["endpoint"] == "https://maas.example.com/v1"
         assert data["extra"] == {"root": "qwen"}
+        assert "owned_by" not in data
 
 
 # ---------------------------------------------------------------------------
@@ -291,24 +277,22 @@ class TestCmdInfo:
 class TestCmdCheck:
     def test_auto_detects_llm(self, capsys: pytest.CaptureFixture[str]):
         client = MagicMock()
-        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/qwen", "ns/qwen")])
-        mc = MagicMock()
-        mc.chat.completions.create.return_value = _completion("4")
-        with patch("autox_tools.maas.cli._client.model_client", return_value=mc):
-            cli.cmd_check(client, _SETTINGS, _args(command="check", model_id="qwen"))
+        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/qwen")])
+        client.chat.completions.create.return_value = _completion("4")
+        cli.cmd_check(client, _SETTINGS, _args(command="check", model_id="qwen"))
         out = capsys.readouterr().out
         assert "PASS" in out
         assert "llm" in out
         assert "4" in out
+        # The listed id is passed straight through as the request's model param.
+        assert client.chat.completions.create.call_args.kwargs["model"] == "publishers/ns/models/qwen"
 
     def test_auto_falls_back_to_embedding(self, capsys: pytest.CaptureFixture[str]):
         client = MagicMock()
-        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/embed", "ns/embed")])
-        mc = MagicMock()
-        mc.chat.completions.create.side_effect = RuntimeError("not a chat model")
-        mc.embeddings.create.return_value = _embedding(768)
-        with patch("autox_tools.maas.cli._client.model_client", return_value=mc):
-            cli.cmd_check(client, _SETTINGS, _args(command="check", model_id="embed"))
+        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/embed")])
+        client.chat.completions.create.side_effect = RuntimeError("not a chat model")
+        client.embeddings.create.return_value = _embedding(768)
+        cli.cmd_check(client, _SETTINGS, _args(command="check", model_id="embed"))
         out = capsys.readouterr().out
         assert "PASS" in out
         assert "embedding" in out
@@ -316,12 +300,10 @@ class TestCmdCheck:
 
     def test_auto_both_fail(self, capsys: pytest.CaptureFixture[str]):
         client = MagicMock()
-        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/dead", "ns/dead")])
-        mc = MagicMock()
-        mc.chat.completions.create.side_effect = RuntimeError("chat down")
-        mc.embeddings.create.side_effect = RuntimeError("embed down")
-        with patch("autox_tools.maas.cli._client.model_client", return_value=mc):
-            cli.cmd_check(client, _SETTINGS, _args(command="check", model_id="dead"))
+        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/dead")])
+        client.chat.completions.create.side_effect = RuntimeError("chat down")
+        client.embeddings.create.side_effect = RuntimeError("embed down")
+        cli.cmd_check(client, _SETTINGS, _args(command="check", model_id="dead"))
         out = capsys.readouterr().out
         assert "FAIL" in out
         assert "chat down" in out
@@ -329,29 +311,25 @@ class TestCmdCheck:
 
     def test_explicit_llm_does_not_probe_embedding(self):
         client = MagicMock()
-        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/x", "ns/x")])
-        mc = MagicMock()
-        mc.chat.completions.create.side_effect = RuntimeError("boom")
-        with patch("autox_tools.maas.cli._client.model_client", return_value=mc):
-            cli.cmd_check(client, _SETTINGS, _args(command="check", model_id="x", type="llm"))
-        mc.embeddings.create.assert_not_called()
+        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/x")])
+        client.chat.completions.create.side_effect = RuntimeError("boom")
+        cli.cmd_check(client, _SETTINGS, _args(command="check", model_id="x", type="llm"))
+        client.embeddings.create.assert_not_called()
 
     def test_not_found_exits(self):
         client = MagicMock()
-        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/foo", "ns/foo")])
+        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/foo")])
         with pytest.raises(SystemExit, match="not found"):
             cli.cmd_check(client, _SETTINGS, _args(command="check", model_id="missing"))
 
     def test_all_models(self, capsys: pytest.CaptureFixture[str]):
         client = MagicMock()
         client.models.list.return_value = _list_response([
-            _make_model("publishers/ns/models/qwen", "ns/qwen"),
-            _make_model("publishers/ns/models/embed", "ns/embed"),
+            _make_model("publishers/ns/models/qwen"),
+            _make_model("publishers/ns/models/embed"),
         ])
-        mc = MagicMock()
-        mc.chat.completions.create.return_value = _completion("4")
-        with patch("autox_tools.maas.cli._client.model_client", return_value=mc):
-            cli.cmd_check(client, _SETTINGS, _args(command="check", model_id=None))
+        client.chat.completions.create.return_value = _completion("4")
+        cli.cmd_check(client, _SETTINGS, _args(command="check", model_id=None))
         out = capsys.readouterr().out
         assert "qwen" in out
         assert "embed" in out
@@ -360,24 +338,21 @@ class TestCmdCheck:
 
     def test_json_single(self, capsys: pytest.CaptureFixture[str]):
         client = MagicMock()
-        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/qwen", "ns/qwen")])
-        mc = MagicMock()
-        mc.chat.completions.create.return_value = _completion("4")
-        with patch("autox_tools.maas.cli._client.model_client", return_value=mc):
-            cli.cmd_check(client, _SETTINGS, _args(command="check", model_id="qwen", json=True))
+        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/qwen")])
+        client.chat.completions.create.return_value = _completion("4")
+        cli.cmd_check(client, _SETTINGS, _args(command="check", model_id="qwen", json=True))
         data = json.loads(capsys.readouterr().out)
+        assert data["model_id"] == "publishers/ns/models/qwen"
         assert data["status"] == "pass"
         assert data["detected_type"] == "llm"
         assert data["response"] == "4"
 
     def test_json_all(self, capsys: pytest.CaptureFixture[str]):
         client = MagicMock()
-        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/embed", "ns/embed")])
-        mc = MagicMock()
-        mc.chat.completions.create.side_effect = RuntimeError("no chat")
-        mc.embeddings.create.return_value = _embedding(1536)
-        with patch("autox_tools.maas.cli._client.model_client", return_value=mc):
-            cli.cmd_check(client, _SETTINGS, _args(command="check", model_id=None, json=True))
+        client.models.list.return_value = _list_response([_make_model("publishers/ns/models/embed")])
+        client.chat.completions.create.side_effect = RuntimeError("no chat")
+        client.embeddings.create.return_value = _embedding(1536)
+        cli.cmd_check(client, _SETTINGS, _args(command="check", model_id=None, json=True))
         data = json.loads(capsys.readouterr().out)
         assert data["total"] == 1
         assert data["results"][0]["detected_type"] == "embedding"
@@ -440,7 +415,7 @@ class TestAbortOnApiError:
 
     @staticmethod
     def _status_error(status_code: int, body: str) -> APIStatusError:
-        request = httpx.Request("GET", "https://maas.example.com/maas-api/v1/models")
+        request = httpx.Request("GET", "https://maas.example.com/v1/models")
         response = httpx.Response(status_code, request=request, text=body)
         return APIStatusError("boom", response=response, body=None)
 
@@ -468,7 +443,7 @@ class TestAbortOnApiError:
         assert "bad input" in msg
 
     def test_connection_error_reports_endpoint(self):
-        request = httpx.Request("GET", "https://maas.example.com/maas-api/v1/models")
+        request = httpx.Request("GET", "https://maas.example.com/v1/models")
         exc = APIConnectionError(request=request)
         with pytest.raises(SystemExit) as excinfo:
             cli._abort_on_api_error(exc, _SETTINGS)
