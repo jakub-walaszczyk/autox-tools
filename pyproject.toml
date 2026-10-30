@@ -5,6 +5,7 @@ description = "Internal scripts and tooling for evaluating and operating on proj
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "boto3>=1.28",
+    "httpx>=0.27",
     "kfp>=2.15.2",
     "kubernetes>=28.0",
     "ogx-client>=1.0.2",
@@ -29,6 +30,7 @@ ogx = "autox_tools.ogx.cli:main"
 maas = "autox_tools.maas.cli:main"
 secrets = "autox_tools.secrets.cli:main"
 config = "autox_tools.config.cli:main"
+quay = "autox_tools.quay.cli:main"
 
 [dependency-groups]
 dev = [

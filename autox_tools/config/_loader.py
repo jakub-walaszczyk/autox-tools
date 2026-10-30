@@ -35,6 +35,7 @@ from autox_tools.config._models import (
     OgxConfig,
     PgvectorConfig,
     Profile,
+    QuayConfig,
     RhoaiConfig,
     S3Config,
 )
@@ -159,6 +160,14 @@ def _build_maas(raw: dict) -> MaasConfig:
     )
 
 
+def _build_quay(raw: dict) -> QuayConfig:
+    return QuayConfig(
+        base_url=raw.get("base_url", "https://quay.io"),
+        namespace=raw.get("namespace", ""),
+        token=raw.get("token", ""),
+    )
+
+
 _BUILDERS: dict[str, Any] = {
     "s3": _build_s3,
     "rhoai": _build_rhoai,
@@ -166,6 +175,7 @@ _BUILDERS: dict[str, Any] = {
     "pgvector": _build_pgvector,
     "ogx": _build_ogx,
     "maas": _build_maas,
+    "quay": _build_quay,
 }
 
 _YAML_PATHS: dict[str, tuple[str, ...]] = {
@@ -175,6 +185,7 @@ _YAML_PATHS: dict[str, tuple[str, ...]] = {
     "pgvector": ("vs", "pgvector"),
     "ogx": ("ogx",),
     "maas": ("maas",),
+    "quay": ("quay",),
 }
 
 
@@ -187,6 +198,7 @@ def _build_profile(raw: dict) -> Profile:
         pgvector=raw.get("pgvector", ""),
         ogx=raw.get("ogx", ""),
         maas=raw.get("maas", ""),
+        quay=raw.get("quay", ""),
     )
 
 
