@@ -36,6 +36,7 @@ profiles:
     pgvector: local-pgvector
     ogx: dev-ogx
     maas: dev-maas
+    quay: odh
 
   staging:
     s3: aws-staging
@@ -119,3 +120,9 @@ maas:
     api_key: ${MAAS_API_KEY}
     # Set false for clusters exposing self-signed TLS routes.
     verify_tls: true
+
+# Quay repository discovery (anonymous access works for public images).
+quay:
+  odh:
+    base_url: https://quay.io
+    namespace: opendatahub
