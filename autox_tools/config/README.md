@@ -10,7 +10,7 @@ Manage `.autox.yaml` configuration profiles -- list available profiles and servi
 uv run config list
 ```
 
-Displays all defined profiles (with their service mappings) and all named service configurations grouped by type (s3, rhoai, vs.milvus, vs.pgvector, ogx, maas).
+Displays all defined profiles (with their service mappings) and all named service configurations grouped by type (s3, rhoai, vs.milvus, vs.pgvector, ogx, maas, quay).
 
 ### `show` -- Show resolved config for a profile
 
@@ -36,7 +36,7 @@ uv run config init
 uv run config init --force    # overwrite existing file
 ```
 
-Copies the bundled `.autox.yaml.example` template to `.autox.yaml` in the current directory. Falls back to a minimal built-in template if the example file is missing.
+Copies the bundled `.autox.example.yaml` template to `.autox.yaml` in the current directory. Falls back to a minimal built-in template if the example file is missing.
 
 ## Configuration file format
 
@@ -46,7 +46,7 @@ The `.autox.yaml` file has four top-level sections:
 |---|---|
 | `defaults` | Default profile name (`defaults.profile`) |
 | `profiles` | Named profiles mapping service types to named configs |
-| `s3`, `rhoai`, `ogx`, `maas` | Top-level service config blocks |
+| `s3`, `rhoai`, `ogx`, `maas`, `quay` | Top-level service config blocks |
 | `vs.milvus`, `vs.pgvector` | Vector store configs nested under `vs` |
 
 Values support `${ENV_VAR}` interpolation so raw credentials stay out of the file.
@@ -60,7 +60,7 @@ The loader locates `.autox.yaml` in this order:
 
 `AUTOX_CONFIG` is what lets the CLI run from **any** directory: the `install.sh` alias pins it to the project's `.autox.yaml` (alongside `--env-file` for `.env`), so profiles resolve identically no matter where you invoke the tool. A missing path is ignored gracefully, falling through to `.env`.
 
-See [`.autox.yaml.example`](../../.autox.example.yaml) for a fully annotated reference and the [main README](../../README.md#configuration) for the resolution order.
+See [`.autox.example.yaml`](../../.autox.example.yaml) for a fully annotated reference and the [main README](../../README.md#configuration) for the resolution order.
 
 ## Architecture
 
@@ -72,3 +72,8 @@ autox_tools/config/
   cli.py         argparse entry point and subcommands
   README.md      This file
 ```
+
+Quay targets accept `base_url` (default `https://quay.io`), `namespace` (optional),
+and `token` (optional Quay API bearer token, masked by `config show`). Profiles
+map `quay: <target-name>`; an unmapped service falls back to `QUAY_*` variables.
+See the [Quay guide](../quay/README.md) for examples.

@@ -64,6 +64,13 @@ class MaasConfig:
 
 
 @dataclass(frozen=True)
+class QuayConfig:
+    base_url: str = "https://quay.io"
+    namespace: str = ""
+    token: str = ""
+
+
+@dataclass(frozen=True)
 class Profile:
     s3: str = ""
     artifacts_s3: str = ""
@@ -72,6 +79,7 @@ class Profile:
     pgvector: str = ""
     ogx: str = ""
     maas: str = ""
+    quay: str = ""
 
 
 SERVICE_CONFIG_TYPES: dict[str, type] = {
@@ -82,6 +90,7 @@ SERVICE_CONFIG_TYPES: dict[str, type] = {
     "pgvector": PgvectorConfig,
     "ogx": OgxConfig,
     "maas": MaasConfig,
+    "quay": QuayConfig,
 }
 
 _SERVICE_ATTRS: dict[str, str] = {
@@ -92,6 +101,7 @@ _SERVICE_ATTRS: dict[str, str] = {
     "pgvector": "pgvector",
     "ogx": "ogx",
     "maas": "maas",
+    "quay": "quay",
 }
 
 _SERVICE_YAML_SECTIONS: dict[str, str] = {
@@ -102,6 +112,7 @@ _SERVICE_YAML_SECTIONS: dict[str, str] = {
     "pgvector": "vs.pgvector",
     "ogx": "ogx",
     "maas": "maas",
+    "quay": "quay",
 }
 
 
@@ -115,6 +126,7 @@ class AutoxConfig:
     pgvector: dict[str, PgvectorConfig] = field(default_factory=dict)
     ogx: dict[str, OgxConfig] = field(default_factory=dict)
     maas: dict[str, MaasConfig] = field(default_factory=dict)
+    quay: dict[str, QuayConfig] = field(default_factory=dict)
 
     def service_configs(self, service_type: str) -> dict:
         attr = _SERVICE_ATTRS.get(service_type, service_type)

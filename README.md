@@ -35,6 +35,7 @@ uv run vs milvus --help
 | `ogx` | [`autox_tools/ogx/`](autox_tools/ogx/README.md) | Inspect and test models, providers, and vector stores on an OGX gateway |
 | `maas` | [`autox_tools/maas/`](autox_tools/maas/README.md) | List and sanity-check models served by OpenShift MaaS (Model-as-a-Service) |
 | `secrets` | [`autox_tools/secrets/`](autox_tools/secrets/README.md) | Manage Kubernetes Opaque secrets -- list, decode, create, update, and delete key-value secrets |
+| `quay` | [`autox_tools/quay/`](autox_tools/quay/README.md) | Resolve exact tagged images and recent tag history as JSON; discover Quay repositories and tags |
 | `config` | [`autox_tools/config/`](autox_tools/config/README.md) | Manage configuration profiles -- list, show, validate, and initialize `.autox.yaml` |
 
 ## Typical workflow
@@ -77,7 +78,7 @@ Generate a starter config from the bundled template:
 uv run config init
 ```
 
-See [`.autox.yaml.example`](.autox.yaml.example) for the full annotated reference. Secrets support `${ENV_VAR}` interpolation so raw credentials stay out of the file.
+See [`.autox.example.yaml`](.autox.example.yaml) for the full annotated reference. Secrets support `${ENV_VAR}` interpolation so raw credentials stay out of the file.
 
 **Resolution order** (highest priority wins):
 
@@ -105,6 +106,7 @@ Each tool also reads connection settings from environment variables. Place a `.e
 | `AWS_*` | Data storage (experiment assets, datasets) | `s3` tool |
 | `ARTIFACTS_AWS_*` | Pipeline artifacts (evaluation results, notebooks, leaderboard) | `pipelines artifacts` subcommand |
 | `OGX_CLIENT_*` | OGX gateway connection (base URL, API key) | `ogx` tool |
+| `QUAY_*` | Quay registry origin, default namespace, optional API bearer token | `quay` tool |
 | `MAAS_*` | OpenShift MaaS connection (base URL, API key, TLS verification) | `maas` tool |
 | `RHOAI_*`, `K8S_*` | OpenShift cluster auth and K8S API access | `pipelines`, `secrets` tools |
 
@@ -171,6 +173,7 @@ autox-tools/
       _client.py       #   Settings resolution + OpenAI client / endpoint derivation
       cli.py           #   argparse entry point and subcommands
       README.md        #   Command reference and setup guide
+    quay/              # Quay tagged-image details, history, and discovery
     secrets/           # Kubernetes secret management tool
       __init__.py
       _client.py       #   K8S client factory (config or env vars -> CoreV1Api)
@@ -190,7 +193,7 @@ autox-tools/
       cli.py           #   argparse entry point and subcommands
       README.md        #   Command reference and setup guide
   tests/
-  .autox.yaml.example  # Annotated config template
+  .autox.example.yaml  # Annotated config template
   pyproject.toml
 ```
 

@@ -13,8 +13,12 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from autox_tools.config._loader import _CONFIG_FILENAME, find_config, load_config
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 _MASK_FIELDS = {"secret_access_key", "password", "token", "api_key"}
 
@@ -55,13 +59,14 @@ def cmd_list(args: argparse.Namespace) -> None:
             if ref:
                 print(f"    {f.name}: {ref}")
 
-    sections = [
+    sections: list[tuple[str, Mapping[str, object]]] = [
         ("s3", cfg.s3),
         ("rhoai", cfg.rhoai),
         ("vs.milvus", cfg.milvus),
         ("vs.pgvector", cfg.pgvector),
         ("ogx", cfg.ogx),
         ("maas", cfg.maas),
+        ("quay", cfg.quay),
     ]
     for section_name, configs in sections:
         if configs:
@@ -84,7 +89,7 @@ def cmd_show(args: argparse.Namespace) -> None:
     profile = cfg.profiles[profile_name]
     print(f"Profile: {profile_name}")
 
-    mappings = [
+    mappings: list[tuple[str, str, Mapping[str, object]]] = [
         ("s3", profile.s3, cfg.s3),
         ("artifacts_s3", profile.artifacts_s3, cfg.s3),
         ("rhoai", profile.rhoai, cfg.rhoai),
@@ -92,6 +97,7 @@ def cmd_show(args: argparse.Namespace) -> None:
         ("vs.pgvector", profile.pgvector, cfg.pgvector),
         ("ogx", profile.ogx, cfg.ogx),
         ("maas", profile.maas, cfg.maas),
+        ("quay", profile.quay, cfg.quay),
     ]
     for label, config_name, store in mappings:
         if not config_name:
@@ -117,7 +123,7 @@ def cmd_validate(args: argparse.Namespace) -> None:
     errors: list[str] = []
 
     for profile_name, profile in cfg.profiles.items():
-        mappings = [
+        mappings: list[tuple[str, str, Mapping[str, object]]] = [
             ("s3", profile.s3, cfg.s3),
             ("artifacts_s3", profile.artifacts_s3, cfg.s3),
             ("rhoai", profile.rhoai, cfg.rhoai),
@@ -125,6 +131,7 @@ def cmd_validate(args: argparse.Namespace) -> None:
             ("vs.pgvector", profile.pgvector, cfg.pgvector),
             ("ogx", profile.ogx, cfg.ogx),
             ("maas", profile.maas, cfg.maas),
+            ("quay", profile.quay, cfg.quay),
         ]
         for label, config_name, store in mappings:
             if config_name and config_name not in store:
@@ -146,7 +153,7 @@ def cmd_validate(args: argparse.Namespace) -> None:
     print(f"  {len(cfg.profiles)} profile(s), "
           f"{len(cfg.s3)} s3, {len(cfg.rhoai)} rhoai, "
           f"{len(cfg.milvus)} vs.milvus, {len(cfg.pgvector)} vs.pgvector, "
-          f"{len(cfg.ogx)} ogx, {len(cfg.maas)} maas config(s)")
+          f"{len(cfg.ogx)} ogx, {len(cfg.maas)} maas, {len(cfg.quay)} quay config(s)")
 
 
 def cmd_init(args: argparse.Namespace) -> None:
@@ -155,7 +162,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     if target.exists() and not args.force:
         sys.exit(f"{_CONFIG_FILENAME} already exists. Use --force to overwrite.")
 
-    example = Path(__file__).resolve().parent.parent.parent / ".autox.yaml.example"
+    example = Path(__file__).resolve().parent.parent.parent / ".autox.example.yaml"
     content = example.read_text() if example.is_file() else _MINIMAL_TEMPLATE
 
     target.write_text(content)
@@ -179,6 +186,7 @@ profiles:
     # pgvector: my-pgvector
     # ogx: my-ogx
     # maas: my-maas
+    quay: odh
 
 s3:
   my-s3:
@@ -187,6 +195,12 @@ s3:
     secret_access_key: ${AWS_SECRET_ACCESS_KEY}
     region: us-east-1
     verify_tls: false
+
+quay:
+  odh:
+    base_url: https://quay.io
+    namespace: opendatahub
+    # token: ${QUAY_TOKEN}
 
 # vs:
 #   milvus:
