@@ -27,13 +27,11 @@ class RhoaiConfig:
 
 @dataclass(frozen=True)
 class MilvusConfig:
-    host: str
-    port: int
-    user: str = ""
-    password: str = ""
+    uri: str
+    token: str = ""
     secure: bool = False
     # Path to the server/CA PEM certificate for one-way TLS. Passed through to
-    # pymilvus' ``server_pem_path``. Ignored when ``secure`` is False.
+    # pymilvus' ``server_pem_path``. Used with HTTPS or ``secure=True``.
     server_pem_path: str = ""
 
 

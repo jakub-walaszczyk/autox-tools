@@ -72,8 +72,8 @@ _SAMPLE_YAML = textwrap.dedent("""\
     vs:
       milvus:
         local-milvus:
-          host: milvus.dev.example.com
-          port: 19530
+          uri: http://milvus.dev.example.com:19530
+          token: milvus-api-key
           secure: false
 
       pgvector:
@@ -227,7 +227,8 @@ class TestLoadConfig:
             cfg = load_config(path)
             m = cfg.milvus["local-milvus"]
             assert isinstance(m, MilvusConfig)
-            assert m.port == 19530
+            assert m.uri == "http://milvus.dev.example.com:19530"
+            assert m.token == "milvus-api-key"
             assert m.secure is False
             assert m.server_pem_path == ""  # defaults empty when omitted
 
@@ -236,8 +237,7 @@ class TestLoadConfig:
             vs:
               milvus:
                 secure-milvus:
-                  host: milvus.dev.example.com
-                  port: 19530
+                  uri: https://milvus.dev.example.com:19530
                   secure: true
                   server_pem_path: certs/milvus.crt
         """)
@@ -245,6 +245,7 @@ class TestLoadConfig:
             path = _write_config(d, content)
             cfg = load_config(path)
             m = cfg.milvus["secure-milvus"]
+            assert m.token == ""
             assert m.secure is True
             assert m.server_pem_path == str((Path(d) / "certs/milvus.crt").resolve())
 
@@ -254,8 +255,7 @@ class TestLoadConfig:
             vs:
               milvus:
                 secure-milvus:
-                  host: milvus.dev.example.com
-                  port: 19530
+                  uri: https://milvus.dev.example.com:19530
                   secure: true
                   server_pem_path: {abs_cert}
         """)
