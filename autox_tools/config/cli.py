@@ -205,8 +205,8 @@ quay:
 # vs:
 #   milvus:
 #     my-milvus:
-#       host: milvus.apps.cluster.example.com
-#       port: 19530
+#       uri: http://milvus.apps.cluster.example.com:19530
+#       token: ${MILVUS_TOKEN}
 #   pgvector:
 #     my-pgvector:
 #       host: pgvector.apps.cluster.example.com

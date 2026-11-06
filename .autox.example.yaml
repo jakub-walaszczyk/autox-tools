@@ -85,12 +85,11 @@ rhoai:
 vs:
   milvus:
     local-milvus:
-      host: milvus.apps.dev-cluster.example.com
-      port: 19530
-      # user: ""
-      # password: ""
+      uri: http://milvus.apps.dev-cluster.example.com:19530
+      token: ${MILVUS_TOKEN}  # API key or username:password; empty for no authentication
+      # HTTPS URIs enable TLS automatically.
       secure: false
-      # Path to the server/CA PEM cert for one-way TLS (used when secure: true).
+      # Path to the server/CA PEM cert for one-way TLS (HTTPS or secure: true).
       # Relative paths resolve against this config file's directory.
       # server_pem_path: local/milvus.crt
 

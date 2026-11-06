@@ -12,15 +12,20 @@ Define named Milvus configs under the `vs.milvus` section in `.autox.yaml`:
 vs:
   milvus:
     local-milvus:
-      host: milvus.apps.dev-cluster.example.com
-      port: 19530
-      secure: false
+      uri: http://milvus.apps.dev-cluster.example.com:19530
+      token: ${MILVUS_TOKEN}  # API key or username:password; optional without authentication
       # server_pem_path: local/milvus.crt   # server/CA PEM for one-way TLS
 ```
 
-For a TLS-enabled server, set `secure: true` and point `server_pem_path` at
-the server/CA certificate. Relative paths resolve against the `.autox.yaml`
-directory, so they work regardless of where you run the command.
+For a TLS-enabled server, use an `https://` URI. TLS can also be enabled with
+`secure: true`. If a custom server/CA certificate is needed, set `server_pem_path`.
+Relative certificate paths resolve against the `.autox.yaml` directory, so they
+work regardless of where you run the command.
+
+The URI includes the scheme and port, for example `http://localhost:19530` or
+`https://milvus.apps.cluster.example.com:443`. Set `token` to an API key or
+`username:password`; omit it when authentication is disabled. These fields replace
+the previous `host`, `port`, `user`, and `password` settings.
 
 Then select them via CLI flags:
 
@@ -37,13 +42,11 @@ Alternatively, create a `.env` file in the project root or export the variables 
 
 ```bash
 # Required
-MILVUS_HOST=localhost        # Hostname or IP of the Milvus server
-MILVUS_PORT=19530            # gRPC port
+MILVUS_URI=http://localhost:19530
 
 # Optional
-MILVUS_USER=root             # Authentication username
-MILVUS_PASSWORD=Milvus       # Authentication password
-MILVUS_SECURE=false          # Set to "true" to enable TLS
+MILVUS_TOKEN=               # API key or username:password
+MILVUS_SECURE=false          # HTTPS URIs enable TLS automatically
 MILVUS_SERVER_PEM_PATH=      # Server/CA PEM cert for one-way TLS
 ```
 

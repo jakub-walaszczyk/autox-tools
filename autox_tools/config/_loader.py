@@ -125,10 +125,8 @@ def _build_rhoai(raw: dict) -> RhoaiConfig:
 
 def _build_milvus(raw: dict) -> MilvusConfig:
     return MilvusConfig(
-        host=raw["host"],
-        port=int(raw["port"]),
-        user=raw.get("user", ""),
-        password=raw.get("password", ""),
+        uri=raw["uri"],
+        token=raw.get("token", ""),
         secure=_parse_bool(raw.get("secure"), False),
         server_pem_path=raw.get("server_pem_path", ""),
     )
